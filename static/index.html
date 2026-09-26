@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SCUTHPC Console</title>
+<style>
+  :root {
+    --bg: #f3f6fb;
+    --card: #ffffff;
+    --text: #1b2433;
+    --muted: #5d6b80;
+    --line: #e4ebf4;
+    --ok: #0c8f62;
+    --warn: #b86e00;
+    --bad: #d12b4a;
+    --info: #1d6fbf;
+    --soft: #f7f9fc;
+    --shadow: 0 10px 30px rgba(28, 52, 84, 0.06);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--text);
+    font: 14px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(180deg, #eef4fb 0%, var(--bg) 220px);
+  }
+  a { color: var(--info); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 48px; }
+  header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; }
+  h1 { margin: 0; font-size: 26px; letter-spacing: -0.03em; }
+  .sub { color: var(--muted); margin-top: 4px; font-size: 13px; }
+  .actions, nav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  nav { margin: 18px 0 16px; }
+  button, .linkbtn, .navbtn {
+    border: 1px solid var(--line);
+    background: #fff;
+    color: var(--text);
+    border-radius: 999px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font: inherit;
+  }
+  button.primary, .navbtn.active { background: #1d6fbf; color: #fff; border-color: #1d6fbf; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 16px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .kpi { background: var(--soft); border-radius: 12px; padding: 12px; }
+  .kpi b { display: block; font-size: 28px; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+  .kpi span, .hint { color: var(--muted); font-size: 12px; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); } .info { color: var(--info); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 6px; }
+  td { padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+  .table-scroll { overflow-x: auto; }
+  .tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); background: #fff; }
+  .tag.gpu { color: #5b3cc4; border-color: #ddd4fb; background: #f6f3ff; }
+  .tag.own { color: var(--warn); border-color: #f3ddb0; background: #fff8eb; }
+  .job { display: grid; grid-template-columns: 280px 1fr; gap: 16px; }
+  .name { font-size: 18px; font-weight: 650; }
+  .id { color: var(--muted); font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+  .bar { height: 8px; border-radius: 99px; background: #e7eef6; overflow: hidden; margin: 6px 0 4px; }
+  .bar > i { display: block; height: 100%; border-radius: 99px; background: #1d6fbf; }
+  .bar.warn > i { background: #e39b2b; }
+  .bar.ok > i { background: #0c8f62; }
+  .gpus { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .gpu { border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; background: var(--soft); }
+  .gpu .top { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+  .gpu strong { font-size: 18px; }
+  .log {
+    margin-top: 10px;
+    background: #f7f9fc;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+    color: #314056;
+    font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+  .empty { color: var(--muted); padding: 12px 0; }
+  .job .stuck { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 10px; background: #fff1f2; color: var(--bad); border: 1px solid #ffd0d6; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+  .chip { border: 1px solid var(--line); background: var(--soft); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
+  .chip b { font-variant-numeric: tabular-nums; }
+  .rowlink { cursor: pointer; }
+  .rowlink:hover td { background: #f4f8fd; }
+  @media (max-width: 800px) {
+    .job, .kpis { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>SCUTHPC Console</h1>
+      <div class="sub" id="sub">正在连接 hpckapok1 / hpckapok2 …</div>
+    </div>
+    <div class="actions">
+      <a class="linkbtn" id="jobsLink" href="https://hpckapok.scut.edu.cn/mis/user/historyJobs" target="_blank" rel="noopener">作业历史</a>
+      <a class="linkbtn" id="filesLink" href="#" target="_blank" rel="noopener">文件存储</a>
+      <button id="notifyBtn" type="button">开启结束通知</button>
+      <button class="primary" id="refresh" type="button">立即刷新</button>
+    </div>
+  </header>
+  <nav>
+    <button class="navbtn active" data-view="overview" type="button">总览</button>
+    <button class="navbtn" data-view="resources" type="button">集群资源</button>
+    <button class="navbtn" data-view="jobs" type="button">在跑作业</button>
+    <button class="navbtn" data-view="history" type="button">作业记录</button>
+  </nav>
+  <section class="view active" id="view-overview"></section>
+  <section class="view" id="view-resources"></section>
+  <section class="view" id="view-jobs"></section>
+  <section class="view" id="view-history"></section>
+</div>
+<script>
+const jobsUrl = "https://hpckapok.scut.edu.cn/mis/user/historyJobs";
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("zh-CN"));
+const gb = (mb) => (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + " GB";
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+function stateClass(st) {
+  const s = (st || "").toUpperCase();
+  if (s.includes("RUN") || s === "IDLE" || s === "COMPLETED") return "ok";
+  if (s.includes("PEND") || s.includes("MIX") || s.includes("COMPLETING")) return "warn";
+  if (s.includes("FAIL") || s.includes("DOWN") || s.includes("CANCEL") || s.includes("DRAIN")) return "bad";
+  return "info";
+}
+function exclusive(name) { return /^(emic|gznet|ex\d|telecom)/i.test(name); }
+function bar(pct, kind) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  return `<div class="bar ${kind || ""}"><i style="width:${p}%"></i></div>`;
+}
+function ago(ts) { return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false }); }
+function sharedTotals(c) {
+  const shared = (c.partitions || []).filter((p) => !exclusive(p.name));
+  const sum = (key) => shared.reduce((n, p) => n + (p[key] || 0), 0);
+  return {
+    gpu_free: sum("gpu_free"), gpu_total: sum("gpu_total"), gpu_offline: sum("gpu_offline"),
+    cpu_free: sum("cpu_free"), cpu_used: sum("cpu_used"),
+    online: sum("online"), nodes: sum("nodes"), offline: sum("offline"),
+  };
+}
+
+function formatDuration(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h) return h + "小时" + m + "分";
+  if (m) return m + "分" + s + "秒";
+  return s + "秒";
+}
+function etaFromLine(line, cur, tot) {
+  const stamp = line.match(/<(\d+-\d+:\d+:\d+|\d+:\d+:\d+|\d+:\d+)/);
+  if (stamp) return "还要约 " + stamp[1];
+  const left = tot - cur;
+  if (left < 0) return "";
+  const ips = line.match(/([\d.]+)\s*it\/s/i);
+  const spi = line.match(/([\d.]+)\s*s\/it/i);
+  if (ips && Number(ips[1]) > 0) return "还要约 " + formatDuration(left / Number(ips[1]));
+  if (spi && Number(spi[1]) > 0) return "还要约 " + formatDuration(left * Number(spi[1]));
+  return "";
+}
+function parseExperiment(lines) {
+  const rows = (lines || []).map((l) => l.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")).reverse();
+  for (const line of rows) {
+    const interesting = /%\||s\/it|it\/s|epoch|step|iter|batch/i.test(line);
+    const frac = line.match(/(\d+)\s*\/\s*(\d+)/);
+    if (frac && interesting) {
+      const cur = Number(frac[1]), tot = Number(frac[2]);
+      if (tot >= 2 && cur <= tot) {
+        const label = line.split("|")[0].replace(/\d+\s*\/\s*\d+.*/, "").trim().slice(0, 48);
+        return {
+          pct: cur / tot * 100,
+          text: cur.toLocaleString("zh-CN") + " / " + tot.toLocaleString("zh-CN"),
+          label,
+          eta: etaFromLine(line, cur, tot),
+        };
+      }
+    }
+    const pct = line.match(/(\d+(?:\.\d+)?)\s*%/);
+    if (pct && interesting) {
+      const n = Number(pct[1]);
+      if (n >= 0 && n <= 100) return { pct: n, text: n + "%", label: "", eta: "" };
+    }
+  }
+  return null;
+}
+function freeGpuNodes(c) {
+  return (c.nodes || [])
+    .filter((n) => !n.offline && n.gpu_free > 0 && !exclusive(n.partition) && /gpu/i.test(n.partition))
+    .sort((a, b) => b.gpu_free - a.gpu_free || a.name.localeCompare(b.name));
+}
+function freeNodeChips(nodes) {
+  if (!nodes.length) return `<p class="hint">公共 GPU 分区现在没有空卡</p>`;
+  return `<div class="chips">${nodes.map((n) => `<span class="chip">${esc(n.name)} <span class="tag">${esc(n.partition)}</span> <b class="ok">剩 ${n.gpu_free}/${n.gpu_total}</b></span>`).join("")}</div>`;
+}
+const lowStreak = {};
+function stuckCount(job) {
+  if (job.state !== "RUNNING" || !(job.gpus || []).length) {
+    lowStreak[job.id] = 0;
+    return 0;
+  }
+  const low = job.gpus.every((g) => g.util < 5);
+  lowStreak[job.id] = low ? (lowStreak[job.id] || 0) + 1 : 0;
+  return lowStreak[job.id];
+}
+
+function clusterKpis(c) {
+  if (!c.ok) return `<article class="card"><h2>${esc(c.label)}</h2><p class="bad">${esc(c.error || "采集失败")}</p></article>`;
+  const t = sharedTotals(c);
+  const running = (c.jobs || []).filter((j) => j.state === "RUNNING").length;
+  const pending = (c.jobs || []).filter((j) => j.state !== "RUNNING").length;
+  return `<article class="card">
+    <h2>${esc(c.label)} <span class="tag">${esc(c.host || "")}</span></h2>
+    <div class="kpis">
+      <div class="kpi"><b class="ok">${fmt(t.gpu_free)}</b><span>公共分区可申请 GPU / 在线 ${fmt(t.gpu_total - t.gpu_offline)}</span></div>
+      <div class="kpi"><b class="info">${fmt(t.cpu_free)}</b><span>空闲 CPU 核 / 在线 ${fmt(t.cpu_free + t.cpu_used)}</span></div>
+      <div class="kpi"><b class="${t.offline ? "warn" : ""}">${fmt(t.online)}</b><span>在线节点 / 共 ${fmt(t.nodes)}，离线 ${fmt(t.offline)}</span></div>
+    </div>
+    <p class="hint" style="margin:12px 0 0">你的作业：在跑 ${running}，排队 ${pending}</p>
+    <h2 style="margin-top:14px">现在能交的公共 GPU</h2>
+    ${freeNodeChips(freeGpuNodes(c))}
+  </article>`;
+}
+
+function resourcePage(clusters) {
+  return clusters.map((c) => {
+    if (!c.ok) return `<article class="card"><h2>${esc(c.label)}</h2><p class="bad">${esc(c.error || "采集失败")}</p></article>`;
+    const rows = (c.partitions || []).map((p) => {
+      const gpu = p.gpu_total ? `${fmt(p.gpu_free)} / ${fmt(p.gpu_total - p.gpu_offline)}` : "—";
+      return `<tr>
+        <td>${esc(p.name)} ${p.gpu_label ? `<span class="tag gpu">${esc(p.gpu_label)}</span>` : ""} ${exclusive(p.name) ? `<span class="tag own">专属</span>` : ""}</td>
+        <td>${p.online}/${p.nodes}</td>
+        <td class="${p.gpu_free ? "ok" : ""}">${gpu}${p.gpu_offline ? ` <span class="bad">${p.gpu_offline} 离线</span>` : ""}</td>
+        <td>${fmt(p.cpu_free)} / ${fmt(p.cpu_free + p.cpu_used)}</td>
+        <td title="空闲 / 混部 / 占满 / 离线">${p.idle_nodes} / ${p.mix_nodes} / ${p.alloc_nodes} / ${p.offline}</td>
+      </tr>`;
+    }).join("");
+    const disk = c.disk;
+    const diskHtml = disk ? `<p class="hint">家目录 ${esc(disk.path)}。下面是整个文件系统占用 ${esc(disk.pct)}，不是个人配额。</p>${bar(parseInt(disk.pct, 10), parseInt(disk.pct, 10) > 80 ? "warn" : "")}` : "";
+    return `<article class="card">
+      <h2>${esc(c.label)}</h2>
+      <h2>现在能交的公共 GPU</h2>
+      ${freeNodeChips(freeGpuNodes(c))}
+      <div class="table-scroll"><table>
+        <thead><tr><th>分区</th><th>在线节点</th><th>GPU 空闲/在线</th><th>CPU 空闲/在线</th><th>空闲/混/满/离</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${diskHtml}
+    </article>`;
+  }).join("");
+}
+
+function jobCard(job, clusterLabel) {
+  const limit = job.limit_sec || 0;
+  const elapsed = job.elapsed_sec || 0;
+  const timePct = limit ? Math.min(100, elapsed / limit * 100) : 0;
+  const exp = parseExperiment(job.log);
+  const gpus = job.gpus || [];
+  const gpuHtml = gpus.length ? `<div class="gpus">${gpus.map((g) => {
+    const memPct = g.mem_total ? g.mem_used / g.mem_total * 100 : 0;
+    return `<div class="gpu">
+      <div class="top"><span>GPU ${g.index}</span><span>${Math.round(g.temp)}°C · ${Math.round(g.power)}W</span></div>
+      <strong class="${g.util < 5 ? "warn" : "ok"}">${Math.round(g.util)}%</strong>
+      ${bar(g.util, g.util < 5 ? "warn" : "ok")}
+      <div class="top"><span>显存 ${(g.mem_used / 1024).toFixed(1)} / ${(g.mem_total / 1024).toFixed(0)} GB</span></div>
+      ${bar(memPct)}
+    </div>`;
+  }).join("")}</div>` : `<div class="empty">${job.state === "RUNNING" ? esc(job.metrics_error || "无 GPU 采样") : "排队中，尚未占用计算卡"}</div>`;
+  const idleFor = lowStreak[job.id] || 0;
+  const stuck = idleFor >= 3 ? `<div class="stuck">显卡利用率已连续 ${idleFor} 次低于 5%（约 ${idleFor * 20} 秒），作业可能卡住。</div>` : "";
+  const expHtml = exp
+    ? `<div class="hint">实验进度${exp.label ? " · " + esc(exp.label) : ""} ${esc(exp.text)}${exp.eta ? " · " + esc(exp.eta) : ""}</div>${bar(exp.pct, "ok")}`
+    : `<p class="hint">实验进度：日志里没有步数</p>`;
+  const log = (job.log || []).length ? `<div class="log">${job.log.map(esc).join("\n")}</div>` : "";
+  return `<article class="card job">
+    ${stuck}
+    <div>
+      <div class="name">${esc(job.name)}</div>
+      <div class="id">${esc(job.id)} · ${esc(clusterLabel)}</div>
+      <p><span class="tag ${stateClass(job.state)}">${esc(job.state)}</span>
+         <span class="tag">${esc(job.partition)}</span>
+         <span class="tag">${esc(job.nodelist || job.reason || "—")}</span></p>
+      <div class="hint">已运行 ${esc(job.elapsed)} / ${esc(job.limit)}</div>
+      ${bar(timePct)}
+      ${expHtml}
+      <p class="hint">${esc(job.gres || "未申请 GPU")}</p>
+      <a href="${jobsUrl}" target="_blank" rel="noopener">在门户查看该作业</a>
+    </div>
+    <div>${gpuHtml}${log}</div>
+  </article>`;
+}
+
+function historyTable(rows) {
+  if (!rows.length) return `<div class="empty">近两日没有作业记录</div>`;
+  const body = rows.slice().reverse().map((r) => {
+    const fail = /FAIL|TIMEOUT|OUT_OF|NODE_FAIL/i.test(r.state || "");
+    const note = fail && r.hint ? esc(r.hint) : esc(r.exit || "");
+    const extra = fail && (r.log || []).length ? `<tr><td colspan="9"><div class="log">${r.log.map(esc).join("\n")}</div></td></tr>` : "";
+    return `<tr>
+      <td><a href="${jobsUrl}" target="_blank" rel="noopener">${esc(r.id)}</a></td>
+      <td>${esc(r.name)}</td><td>${esc(r.cluster || "")}</td><td>${esc(r.partition)}</td>
+      <td class="${stateClass(r.state)}">${esc(r.state)}</td>
+      <td>${esc(r.elapsed)}</td><td>${esc(r.nodelist)}</td><td>${note}</td><td>${esc(r.end)}</td>
+    </tr>${extra}`;
+  }).join("");
+  return `<div class="table-scroll"><table><thead><tr><th>作业</th><th>名称</th><th>集群</th><th>分区</th><th>状态</th><th>用时</th><th>节点</th><th>结果</th><th>结束</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+let primed = false;
+let seenJobs = new Map();
+function notifyLabel() {
+  if (!("Notification" in window)) return "浏览器不支持通知";
+  if (Notification.permission === "granted") return "结束通知已开";
+  if (Notification.permission === "denied") return "通知被浏览器拦住";
+  return "开启结束通知";
+}
+function watchJobs(data) {
+  const now = new Map();
+  const recent = [];
+  (data.clusters || []).forEach((c) => {
+    (c.jobs || []).forEach((j) => now.set(j.id, { name: j.name, cluster: c.label }));
+    (c.recent || []).forEach((r) => recent.push(r));
+  });
+  if (primed && "Notification" in window && Notification.permission === "granted") {
+    seenJobs.forEach((prev, id) => {
+      if (now.has(id)) return;
+      const rec = recent.find((r) => r.id === id);
+      const state = rec ? rec.state : "已结束";
+      if (/RUNNING|PENDING|CONFIGURING/i.test(state)) return;
+      const body = rec && rec.hint ? rec.hint : `${id} · ${prev.cluster}`;
+      try { new Notification(`${prev.name} ${state}`, { body }); } catch (e) {}
+    });
+  }
+  primed = true;
+  seenJobs = now;
+}
+
+let snapshot = null;
+let view = location.hash.replace("#", "") || "overview";
+if (!["overview", "resources", "jobs", "history"].includes(view)) view = "overview";
+
+function show(name) {
+  view = name;
+  document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
+  document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + name));
+  history.replaceState(null, "", "#" + name);
+}
+
+function render() {
+  if (!snapshot) return;
+  const clusters = snapshot.clusters || [];
+  const jobs = [];
+  const recent = [];
+  clusters.forEach((c) => {
+    (c.jobs || []).forEach((j) => jobs.push({ job: j, label: c.label }));
+    (c.recent || []).forEach((r) => recent.push({ ...r, cluster: c.id }));
+  });
+  recent.sort((a, b) => String(a.end).localeCompare(String(b.end)));
+  const running = jobs.filter((x) => x.job.state === "RUNNING");
+  $("view-overview").innerHTML = `<div class="grid2">${clusters.map(clusterKpis).join("")}</div>` +
+    `<article class="card"><h2>在跑作业 <span class="tag">${running.length} 个</span></h2>` +
+    (running.length ? `<div class="table-scroll"><table><thead><tr><th>作业</th><th>集群</th><th>节点</th><th>已运行</th><th>实验进度</th></tr></thead><tbody>` +
+      running.map(({ job, label }) => {
+        const exp = parseExperiment(job.log);
+        const idle = lowStreak[job.id] || 0;
+        const prog = exp ? esc(exp.text) + (exp.eta ? " · " + esc(exp.eta) : "") : "日志未提供";
+        return `<tr class="rowlink" data-go="jobs"><td>${esc(job.name)}<div class="id">${esc(job.id)}</div></td><td>${esc(label)}</td><td>${esc(job.nodelist || "—")}</td><td>${esc(job.elapsed)}</td><td>${idle >= 3 ? `<span class="bad">可能卡住</span> ` : ""}${prog}</td></tr>`;
+      }).join("") + `</tbody></table></div>` : `<div class="empty">当前没有在跑作业</div>`) +
+    `</article>`;
+  $("view-resources").innerHTML = resourcePage(clusters);
+  $("view-jobs").innerHTML = jobs.length ? jobs.map(({ job, label }) => jobCard(job, label)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
+  $("view-history").innerHTML = `<article class="card"><h2>近两日作业</h2>${historyTable(recent.slice(-24))}<p class="hint">作业号跳转到门户历史页，门户里可以看完整日志。</p></article>`;
+  document.querySelectorAll("[data-go]").forEach((el) => el.onclick = () => show(el.dataset.go));
+}
+
+document.querySelectorAll(".navbtn").forEach((b) => b.onclick = () => show(b.dataset.view));
+show(view);
+
+let loading = false;
+async function load() {
+  if (loading) return;
+  loading = true;
+  $("refresh").textContent = "刷新中…";
+  try {
+    const res = await fetch("/api/snapshot");
+    snapshot = await res.json();
+    (snapshot.clusters || []).forEach((c) => (c.jobs || []).forEach((job) => stuckCount(job)));
+    watchJobs(snapshot);
+    $("sub").textContent = `${snapshot.user} · 更新于 ${ago(snapshot.fetched_at)} · 每 20 秒自动刷新`;
+    $("filesLink").href = snapshot.links.files;
+    $("jobsLink").href = snapshot.links.jobs;
+    render();
+  } catch (err) {
+    $("sub").textContent = "刷新失败：" + err;
+  } finally {
+    loading = false;
+    $("refresh").textContent = "立即刷新";
+  }
+}
+$("notifyBtn").textContent = notifyLabel();
+$("notifyBtn").onclick = async () => {
+  if (!("Notification" in window) || Notification.permission !== "default") return;
+  await Notification.requestPermission();
+  $("notifyBtn").textContent = notifyLabel();
+};
+$("refresh").onclick = load;
+load();
+setInterval(load, 20000);
+</script>
+</body>
+</html>

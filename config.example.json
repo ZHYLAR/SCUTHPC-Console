@@ -1,0 +1,18 @@
+{
+  "hosts": [
+    {
+      "ssh": "scut-hpc1",
+      "id": "hpckapok1",
+      "label": "集群 1 · hpckapok1"
+    },
+    {
+      "ssh": "scut-hpc",
+      "id": "hpckapok2",
+      "label": "集群 2 · hpckapok2"
+    }
+  ],
+  "links": {
+    "jobs": "https://hpckapok.scut.edu.cn/mis/user/historyJobs",
+    "files": "https://hpckapok.scut.edu.cn/files/cluster_login2/public/home/{user}"
+  }
+}
