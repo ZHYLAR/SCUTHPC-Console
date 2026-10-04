@@ -45,9 +45,14 @@ def load_settings() -> tuple[tuple[tuple[str, str, str], ...], dict[str, str]]:
 
 TTL_SEC = 12
 SSH_TIMEOUT = 80
+DISK_TTL = 1800
+QUOTA_BYTES = 1024 ** 4
 
 _lock = threading.Lock()
 _cache: dict = {"t": 0.0, "data": None}
+_disk: dict = {}
+_disk_lock = threading.Lock()
+_disk_running = False
 
 REMOTE = r"""
 import json, os, re, subprocess
@@ -387,23 +392,6 @@ for rec in [r for r in out["recent"] if _bad_state(r["state"])][-6:]:
     except OSError:
         pass
 
-rc, text, err = run(["df", "-B1", os.path.expanduser("~")], 15)
-lines = [ln for ln in text.splitlines() if ln.strip()]
-if len(lines) >= 2:
-    cols = lines[-1].split()
-    if len(cols) >= 6:
-        try:
-            out["disk"] = {
-                "total": int(cols[1]),
-                "used": int(cols[2]),
-                "avail": int(cols[3]),
-                "pct": cols[4],
-                "mount": cols[5],
-                "path": os.path.expanduser("~"),
-            }
-        except ValueError:
-            out["disk"] = None
-
 print(json.dumps(out))
 """
 
@@ -535,12 +523,100 @@ def collect() -> dict:
     }
 
 
+def _query_disk(host: str) -> dict | None:
+    script = r"""
+out=/tmp/scuthpc-du-$USER.txt
+pidf=/tmp/scuthpc-du-$USER.pid
+if [ -s "$out" ]; then cat "$out"; fi
+if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
+  printf "PATH=%s\n" "$HOME"
+  exit 0
+fi
+need=0
+if [ ! -s "$out" ]; then need=1; fi
+if [ -s "$out" ] && [ -n "$(find "$out" -mmin +30 2>/dev/null)" ]; then need=1; fi
+if [ "$need" = 1 ]; then
+  nohup sh -c 'nice -n 19 du -sb "$HOME" > "$1.tmp" && mv "$1.tmp" "$1"' _ "$out" >/dev/null 2>&1 &
+  echo $! > "$pidf"
+fi
+printf "PATH=%s\n" "$HOME"
+""".encode()
+    try:
+        proc = subprocess.run(
+            ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", host, "bash", "-s"],
+            input=script,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    used = None
+    path = ""
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        if line.startswith("PATH="):
+            path = line.split("=", 1)[1].strip()
+            continue
+        bits = line.split()
+        if bits and bits[0].isdigit():
+            used = int(bits[0])
+    if used is None:
+        return None
+    pct = min(100.0, round(used / QUOTA_BYTES * 100, 1))
+    return {"used": used, "quota": QUOTA_BYTES, "pct": pct, "path": path}
+
+
+def _refresh_disk() -> None:
+    global _disk_running
+    try:
+        hosts, _links = load_settings()
+        now = time.time()
+        for host, cid, _label in hosts:
+            rec = _disk.get(cid)
+            if rec and now - rec["t"] < DISK_TTL:
+                continue
+            disk = _query_disk(host)
+            if disk:
+                _disk[cid] = {"t": time.time(), "disk": disk}
+            else:
+                _disk[cid] = {"t": time.time() - DISK_TTL + 60, "disk": (_disk.get(cid) or {}).get("disk")}
+    finally:
+        with _disk_lock:
+            _disk_running = False
+
+
+def _ensure_disk_refresh() -> None:
+    global _disk_running
+    hosts, _links = load_settings()
+    now = time.time()
+    stale = any(
+        cid not in _disk or now - _disk[cid]["t"] >= DISK_TTL
+        for _host, cid, _label in hosts
+    )
+    if not stale:
+        return
+    with _disk_lock:
+        if _disk_running:
+            return
+        _disk_running = True
+    threading.Thread(target=_refresh_disk, daemon=True).start()
+
+
+def _attach_disk(data: dict) -> None:
+    for cluster in data.get("clusters") or []:
+        rec = _disk.get(cluster.get("id"))
+        if rec and rec.get("disk"):
+            cluster["disk"] = rec["disk"]
+
+
 def snapshot() -> dict:
+    _ensure_disk_refresh()
     now = time.time()
     with _lock:
         if _cache["data"] and now - _cache["t"] < TTL_SEC:
-            return _cache["data"]
-        data = collect()
-        _cache["t"] = time.time()
-        _cache["data"] = data
-        return data
+            data = _cache["data"]
+        else:
+            data = collect()
+            _cache["t"] = time.time()
+            _cache["data"] = data
+    _attach_disk(data)
+    return data

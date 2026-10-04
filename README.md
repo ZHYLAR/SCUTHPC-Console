@@ -35,10 +35,10 @@
 conda create -n hpc-monitor python=3.11 -y
 conda activate hpc-monitor
 pip install -r requirements.txt
-python -m uvicorn app:app --host 127.0.0.1 --port 8765
+python serve.py
 ```
 
-浏览器打开 [http://127.0.0.1:8765](http://127.0.0.1:8765) 。
+本机打开 [http://127.0.0.1:8765](http://127.0.0.1:8765) 。Tailscale 在运行时，同一网络里的设备用 `tailscale ip -4` 的地址访问同一端口。
 
 默认使用 SSH Host `scut-hpc1`（hpckapok1）和 `scut-hpc`（hpckapok2）。别名不同，或门户地址有变化时，复制 `config.example.json` 为 `config.json` 再改。
 
@@ -46,4 +46,4 @@ Windows cmd 进入其他盘符的目录时使用 `cd /d`。
 
 ## 采集范围
 
-每次刷新对每个集群建立一次 SSH 会话，在登录节点读取节点、队列和近两日记账信息。正在运行的 GPU 作业会用 `srun --overlap` 采样一次 `nvidia-smi`。实验进度只来自标准输出末尾，程序若未打印步数，界面不会估计百分比。页面上的磁盘占用是所在文件系统的整体用量，不是个人配额。
+每次刷新对每个集群建立一次 SSH 会话，在登录节点读取节点、队列和近两日记账信息。正在运行的 GPU 作业会用 `srun --overlap` 采样一次 `nvidia-smi`。实验进度只来自标准输出末尾，程序若未打印步数，界面不会估计百分比。家目录按每人 1 TB 免费配额显示已用量。用量用家目录统计，约每 30 分钟更新一次，不是整个文件系统的占用。

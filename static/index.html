@@ -96,6 +96,8 @@
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
   .chip { border: 1px solid var(--line); background: var(--soft); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
   .chip b { font-variant-numeric: tabular-nums; }
+  .combo { padding: 8px 0 2px; border-top: 1px solid var(--line); }
+  .combo b { font-size: 18px; margin-right: 6px; }
   .rowlink { cursor: pointer; }
   .rowlink:hover td { background: #f4f8fd; }
   @media (max-width: 800px) {
@@ -132,6 +134,14 @@
 const jobsUrl = "https://hpckapok.scut.edu.cn/mis/user/historyJobs";
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("zh-CN"));
+function fmtBytes(n) {
+  if (n == null) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = Number(n);
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i += 1; }
+  return (i === 0 ? v.toFixed(0) : v.toFixed(v >= 10 ? 1 : 2)) + " " + units[i];
+}
 const gb = (mb) => (mb / 1024).toFixed(mb >= 10240 ? 0 : 1) + " GB";
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
@@ -208,9 +218,37 @@ function freeGpuNodes(c) {
     .filter((n) => !n.offline && n.gpu_free > 0 && !exclusive(n.partition) && /gpu/i.test(n.partition))
     .sort((a, b) => b.gpu_free - a.gpu_free || a.name.localeCompare(b.name));
 }
-function freeNodeChips(nodes) {
-  if (!nodes.length) return `<p class="hint">公共 GPU 分区现在没有空卡</p>`;
-  return `<div class="chips">${nodes.map((n) => `<span class="chip">${esc(n.name)} <span class="tag">${esc(n.partition)}</span> <b class="ok">剩 ${n.gpu_free}/${n.gpu_total}</b></span>`).join("")}</div>`;
+function coresPerGpu(clusterId, partition) {
+  if (/kapok1/i.test(clusterId || "") && /A800/i.test(partition || "")) return 9;
+  return 8;
+}
+function rentableOn(node, clusterId) {
+  const cores = coresPerGpu(clusterId, node.partition);
+  const byCpu = Math.floor((node.cpu_free || 0) / cores);
+  return { cores, cards: Math.max(0, Math.min(node.gpu_free || 0, byCpu)) };
+}
+function comboBlock(c) {
+  const rows = freeGpuNodes(c).map((n) => ({ n, ...rentableOn(n, c.id) }));
+  if (!rows.length) return `<h2 style="margin-top:14px">单机可交</h2><p class="hint">公共 GPU 现在没有空卡</p>`;
+  const ok = rows.filter((r) => r.cards > 0);
+  const blocked = rows.filter((r) => r.cards === 0);
+  const groups = new Map();
+  ok.forEach((r) => {
+    const key = r.cards + "|" + r.cores + "|" + r.n.partition;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(r);
+  });
+  const lines = [...groups.values()].sort((a, b) => b[0].cards - a[0].cards).map((list) => {
+    const sample = list[0];
+    const names = list.slice(0, 4).map((r) => r.n.name).join("、");
+    const more = list.length > 4 ? ` 等 ${list.length} 台` : "";
+    return `<div class="combo"><b>${sample.cards} 卡</b><span class="hint">× ${list.length} 台 · 1 卡 ${sample.cores} 核 · ${esc(sample.n.partition)}</span><div class="hint">${esc(names)}${more}</div></div>`;
+  }).join("");
+  const blockedHtml = blocked.length
+    ? `<p class="hint">空卡但核不够，单机交不上：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核`).join("，")}</p>`
+    : "";
+  const max = ok.reduce((m, r) => Math.max(m, r.cards), 0);
+  return `<h2 style="margin-top:14px">单机可交 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">一个作业按一台机器计算，已按配核扣过空闲 CPU。</p>${lines || `<p class="hint">现在没有能按配核交上去的单机组合</p>`}${blockedHtml}`;
 }
 const lowStreak = {};
 function stuckCount(job) {
@@ -228,16 +266,17 @@ function clusterKpis(c) {
   const t = sharedTotals(c);
   const running = (c.jobs || []).filter((j) => j.state === "RUNNING").length;
   const pending = (c.jobs || []).filter((j) => j.state !== "RUNNING").length;
+  const offers = freeGpuNodes(c).map((n) => rentableOn(n, c.id).cards);
+  const maxJob = offers.reduce((m, n) => Math.max(m, n), 0);
   return `<article class="card">
     <h2>${esc(c.label)} <span class="tag">${esc(c.host || "")}</span></h2>
     <div class="kpis">
-      <div class="kpi"><b class="ok">${fmt(t.gpu_free)}</b><span>公共分区可申请 GPU / 在线 ${fmt(t.gpu_total - t.gpu_offline)}</span></div>
+      <div class="kpi"><b class="${maxJob ? "ok" : "warn"}">${fmt(maxJob)}</b><span>单机最多可交 GPU · 空卡合计 ${fmt(t.gpu_free)}</span></div>
       <div class="kpi"><b class="info">${fmt(t.cpu_free)}</b><span>空闲 CPU 核 / 在线 ${fmt(t.cpu_free + t.cpu_used)}</span></div>
       <div class="kpi"><b class="${t.offline ? "warn" : ""}">${fmt(t.online)}</b><span>在线节点 / 共 ${fmt(t.nodes)}，离线 ${fmt(t.offline)}</span></div>
     </div>
     <p class="hint" style="margin:12px 0 0">你的作业：在跑 ${running}，排队 ${pending}</p>
-    <h2 style="margin-top:14px">现在能交的公共 GPU</h2>
-    ${freeNodeChips(freeGpuNodes(c))}
+    ${comboBlock(c)}
   </article>`;
 }
 
@@ -255,11 +294,12 @@ function resourcePage(clusters) {
       </tr>`;
     }).join("");
     const disk = c.disk;
-    const diskHtml = disk ? `<p class="hint">家目录 ${esc(disk.path)}。下面是整个文件系统占用 ${esc(disk.pct)}，不是个人配额。</p>${bar(parseInt(disk.pct, 10), parseInt(disk.pct, 10) > 80 ? "warn" : "")}` : "";
+    const diskHtml = disk
+      ? `<p class="hint">个人免费配额 ${fmtBytes(disk.used)} / 1 TB · ${esc(disk.path || "")}</p>${bar(disk.pct, disk.pct > 80 ? "warn" : "")}`
+      : `<p class="hint">个人免费配额 1 TB，用量统计中</p>`;
     return `<article class="card">
       <h2>${esc(c.label)}</h2>
-      <h2>现在能交的公共 GPU</h2>
-      ${freeNodeChips(freeGpuNodes(c))}
+      ${comboBlock(c)}
       <div class="table-scroll"><table>
         <thead><tr><th>分区</th><th>在线节点</th><th>GPU 空闲/在线</th><th>CPU 空闲/在线</th><th>空闲/混/满/离</th></tr></thead>
         <tbody>${rows}</tbody>
