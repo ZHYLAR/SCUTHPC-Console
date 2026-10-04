@@ -14,6 +14,11 @@ def snapshot():
     return collector.snapshot()
 
 
+@app.get("/api/gpu")
+def gpu():
+    return collector.gpu_sample()
+
+
 @app.get("/")
 def index():
     return FileResponse(ROOT / "static" / "index.html")

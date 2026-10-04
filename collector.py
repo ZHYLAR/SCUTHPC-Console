@@ -620,3 +620,99 @@ def snapshot() -> dict:
             _cache["data"] = data
     _attach_disk(data)
     return data
+
+
+_gpu_lock = threading.Lock()
+_gpu_cache: dict = {"t": 0.0, "data": None}
+
+GPU_REMOTE = r"""
+import json, os, re, subprocess
+
+def run(args, timeout=30):
+    try:
+        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=timeout)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except Exception as exc:
+        return 1, "", str(exc)
+
+user = os.environ.get("USER") or ""
+jobs = []
+rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%b"], 20)
+for line in text.splitlines():
+    bits = line.split("|")
+    if len(bits) < 5 or not bits[0].isdigit():
+        continue
+    jid, name, part, state, gres = bits[:5]
+    if state != "RUNNING":
+        continue
+    if "gpu" not in (gres or "").lower() and not part.lower().startswith("gpu"):
+        continue
+    rc, gpu_txt, err = run([
+        "srun", "--jobid=" + jid, "--overlap", "-N1", "-n1", "--ntasks=1",
+        "nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total",
+        "--format=csv,noheader,nounits",
+    ], 25)
+    gpus = []
+    for row in (gpu_txt or "").splitlines():
+        cols = [c.strip() for c in row.split(",")]
+        if len(cols) < 4 or not cols[0].isdigit():
+            continue
+        try:
+            gpus.append({
+                "index": int(cols[0]),
+                "util": float(cols[1]),
+                "mem_used": float(cols[2]),
+                "mem_total": float(cols[3]),
+            })
+        except ValueError:
+            continue
+    jobs.append({"id": jid, "name": name, "partition": part, "gpus": gpus, "error": "" if gpus else (err or "").strip().splitlines()[-1:][:1]})
+print(json.dumps({"user": user, "jobs": jobs}))
+"""
+
+
+def gpu_sample() -> dict:
+    now = time.time()
+    if _gpu_cache["data"] and now - _gpu_cache["t"] < 4:
+        return _gpu_cache["data"]
+    if not _gpu_lock.acquire(blocking=False):
+        return _gpu_cache["data"] or {"fetched_at": now, "jobs": []}
+    try:
+        hosts, _links = load_settings()
+        jobs = []
+        from concurrent.futures import ThreadPoolExecutor
+
+        def one(host, cid, label):
+            try:
+                proc = subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", host, "bash", "-s"],
+                    input=("python3 - <<'GPU_REMOTE_PY'\n" + GPU_REMOTE + "\nGPU_REMOTE_PY\n").encode(),
+                    capture_output=True,
+                    timeout=40,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                return []
+            raw = proc.stdout.decode("utf-8", "replace").strip()
+            if not raw:
+                return []
+            try:
+                payload = json.loads(raw.splitlines()[-1])
+            except json.JSONDecodeError:
+                return []
+            found = []
+            for job in payload.get("jobs") or []:
+                job["cluster"] = cid
+                job["label"] = label
+                found.append(job)
+            return found
+
+        with ThreadPoolExecutor(max_workers=len(hosts) or 1) as pool:
+            futs = [pool.submit(one, host, cid, label) for host, cid, label in hosts]
+            for fut in futs:
+                jobs.extend(fut.result())
+        data = {"fetched_at": time.time(), "jobs": jobs}
+        _gpu_cache["t"] = data["fetched_at"]
+        _gpu_cache["data"] = data
+        return data
+    finally:
+        _gpu_lock.release()
