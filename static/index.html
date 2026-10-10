@@ -108,8 +108,65 @@
   .swatch { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
   .rowlink { cursor: pointer; }
   .rowlink:hover td { background: #f4f8fd; }
+  .notice-fab {
+    position: fixed;
+    right: 20px;
+    top: 50%;
+    z-index: 20;
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    padding: 0;
+    border: 1px solid #e7c878;
+    background: #fff8df;
+    color: #8a5b00;
+    box-shadow: 0 8px 20px rgba(72, 55, 15, 0.16);
+    font-weight: 700;
+    font-size: 18px;
+  }
+  .notice-fab:focus-visible, .notice-fab:hover { outline: 3px solid rgba(184, 110, 0, 0.2); }
+  .notice-popover {
+    position: fixed;
+    right: 68px;
+    top: calc(50% - 80px);
+    z-index: 19;
+    width: min(330px, calc(100vw - 92px));
+    padding: 12px 14px;
+    border: 1px solid #e7c878;
+    border-radius: 10px;
+    background: #fffdf3;
+    color: #604a16;
+    box-shadow: 0 12px 28px rgba(72, 55, 15, 0.15);
+    font-size: 12px;
+    line-height: 1.55;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+    transition: opacity .15s ease, transform .15s ease;
+  }
+  .notice-popover::after {
+    content: "";
+    position: absolute;
+    right: -7px;
+    top: 74px;
+    width: 12px;
+    height: 12px;
+    border-top: 1px solid #e7c878;
+    border-right: 1px solid #e7c878;
+    background: #fffdf3;
+    transform: rotate(45deg);
+  }
+  .notice-wrap:hover .notice-popover, .notice-wrap:focus-within .notice-popover {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .probe-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #fff8eb; border: 1px solid #f3ddb0; }
+  .probe-note strong { color: var(--text); }
   @media (max-width: 800px) {
     .job, .kpis { grid-template-columns: 1fr; }
+    .notice-fab { right: 10px; }
+    .notice-popover { right: 56px; }
   }
 </style>
 </head>
@@ -137,6 +194,13 @@
   <section class="view" id="view-resources"></section>
   <section class="view" id="view-jobs"></section>
   <section class="view" id="view-history"></section>
+</div>
+<div class="notice-wrap">
+  <button class="notice-fab" type="button" aria-label="查看调度预测说明" title="调度预测说明">!</button>
+  <div class="notice-popover" role="note">
+    <strong>注意：空卡不等于立即可用</strong><br />
+    物理可放置只表示 GPU、CPU 和内存能在同一节点凑齐。实际启动还受优先级、backfill、前序作业时限、账户/QOS、维护和调度刷新影响。预计排队时间会提前或延后；远期或无限时限作业造成的时间会标为“无法可靠估计”。
+  </div>
 </div>
 <script>
 const jobsUrl = "https://hpckapok.scut.edu.cn/mis/user/historyJobs";
@@ -184,6 +248,31 @@ function formatDuration(sec) {
   if (h) return h + "小时" + m + "分";
   if (m) return m + "分" + s + "秒";
   return s + "秒";
+}
+function formatProbeTime(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso.replace("T", " ") : date.toLocaleString("zh-CN", { hour12: false });
+}
+function probeText(c) {
+  const p = c.placement_probe;
+  if (!p) return "";
+  const req = p.request || {};
+  const requestText = `1卡/${req.cpus || 8}核/${Math.round((req.mem_mb || 24576) / 1024)}GiB/${Math.round((req.time_sec || 600) / 60)}分钟`;
+  if (!p.ok) return `<div class="probe-note"><strong>调度探针失败</strong><br /><span class="hint">${esc(p.message || "暂时无法获得预测")}</span></div>`;
+  if (!p.reliable) return `<div class="probe-note"><strong>调度预测：无法可靠估计</strong><br /><span class="hint">探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。可能存在无限时限或超长任务。</span></div>`;
+  if (p.immediate) return `<div class="probe-note"><strong class="ok">预计可立即启动</strong><br /><span class="hint">探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。实际时间仍可能变化。</span></div>`;
+  const delay = p.delay_seconds == null ? "需排队" : "约 " + formatDuration(p.delay_seconds);
+  return `<div class="probe-note"><strong class="warn">预计排队 ${esc(delay)}</strong><br /><span class="hint">预计 ${esc(formatProbeTime(p.start_time))} · 探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。这不是保证时间。</span></div>`;
+}
+function queueEstimateText(job) {
+  if (job.state !== "PENDING") return "";
+  const reason = job.reason && job.reason !== "None" ? ` · 原因 ${esc(job.reason)}` : "";
+  if (!job.start_time || !job.queue_estimate_reliable) {
+    return `<div class="probe-note"><strong>排队预估：暂时无法可靠估计</strong><br /><span class="hint">${reason || "Slurm 尚未给出确定的启动时间"}。作业状态会随调度刷新变化。</span></div>`;
+  }
+  const delay = job.queue_delay_seconds == null ? "需排队" : "约 " + formatDuration(job.queue_delay_seconds);
+  return `<div class="probe-note"><strong class="warn">排队预估：${esc(delay)}</strong><br /><span class="hint">预计 ${esc(formatProbeTime(job.start_time))}${reason}。这不是保证时间。</span></div>`;
 }
 function etaFromLine(line, cur, tot) {
   const stamp = line.match(/<(\d+-\d+:\d+:\d+|\d+:\d+:\d+|\d+:\d+)/);
@@ -233,7 +322,8 @@ function coresPerGpu(clusterId, partition) {
 function rentableOn(node, clusterId) {
   const cores = coresPerGpu(clusterId, node.partition);
   const byCpu = Math.floor((node.cpu_free || 0) / cores);
-  return { cores, cards: Math.max(0, Math.min(node.gpu_free || 0, byCpu)) };
+  const byMem = Math.floor((node.sched_mem_free_mb || 0) / 24576);
+  return { cores, mem: 24576, cards: Math.max(0, Math.min(node.gpu_free || 0, byCpu, byMem)) };
 }
 function comboBlock(c) {
   const rows = freeGpuNodes(c).map((n) => ({ n, ...rentableOn(n, c.id) }));
@@ -253,10 +343,10 @@ function comboBlock(c) {
     return `<div class="combo"><b>${sample.cards} 卡</b><span class="hint">× ${list.length} 台 · 1 卡 ${sample.cores} 核 · ${esc(sample.n.partition)}</span><div class="hint">${esc(names)}${more}</div></div>`;
   }).join("");
   const blockedHtml = blocked.length
-    ? `<p class="hint">空卡但核不够，单机交不上：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核`).join("，")}</p>`
+    ? `<p class="hint">空卡但 CPU 或内存不够，单机放不上：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核 / ${fmtBytes((r.n.sched_mem_free_mb || 0) * 1024 * 1024)}`).join("，")}</p>`
     : "";
   const max = ok.reduce((m, r) => Math.max(m, r.cards), 0);
-  return `<h2 style="margin-top:14px">单机可交 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">一个作业按一台机器计算，已按配核扣过空闲 CPU。</p>${lines || `<p class="hint">现在没有能按配核交上去的单机组合</p>`}${blockedHtml}`;
+  return `<h2 style="margin-top:14px">资源可放置 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">物理可放置 ≠ 立即启动；下方另列 Slurm 调度探针。</p>${probeText(c)}${lines || `<p class="hint">现在没有满足 GPU/CPU/内存的单机组合</p>`}${blockedHtml}`;
 }
 const lowStreak = {};
 function stuckCount(job) {
@@ -298,6 +388,7 @@ function resourcePage(clusters) {
         <td>${p.online}/${p.nodes}</td>
         <td class="${p.gpu_free ? "ok" : ""}">${gpu}${p.gpu_offline ? ` <span class="bad">${p.gpu_offline} 离线</span>` : ""}</td>
         <td>${fmt(p.cpu_free)} / ${fmt(p.cpu_free + p.cpu_used)}</td>
+        <td>${fmtBytes((p.sched_mem_free_mb || 0) * 1024 * 1024)}</td>
         <td title="空闲 / 混部 / 占满 / 离线">${p.idle_nodes} / ${p.mix_nodes} / ${p.alloc_nodes} / ${p.offline}</td>
       </tr>`;
     }).join("");
@@ -309,7 +400,7 @@ function resourcePage(clusters) {
       <h2>${esc(c.label)}</h2>
       ${comboBlock(c)}
       <div class="table-scroll"><table>
-        <thead><tr><th>分区</th><th>在线节点</th><th>GPU 空闲/在线</th><th>CPU 空闲/在线</th><th>空闲/混/满/离</th></tr></thead>
+        <thead><tr><th>分区</th><th>在线节点</th><th>GPU 空闲/在线</th><th>CPU 空闲/在线</th><th>调度内存空闲</th><th>空闲/混/满/离</th></tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
       ${diskHtml}
@@ -347,6 +438,7 @@ function jobCard(job, clusterLabel) {
       <p><span class="tag ${stateClass(job.state)}">${esc(job.state)}</span>
          <span class="tag">${esc(job.partition)}</span>
          <span class="tag">${esc(job.nodelist || job.reason || "—")}</span></p>
+      ${queueEstimateText(job)}
       <div class="hint">已运行 ${esc(job.elapsed)} / ${esc(job.limit)}</div>
       ${bar(timePct)}
       ${expHtml}
@@ -496,6 +588,13 @@ function paintChart(canvas) {
       else ctx.lineTo(x, y);
     });
     ctx.stroke();
+    const last = pts[pts.length - 1];
+    const lx = pad.l + pw * ((last.t - t0) / (t1 - t0));
+    const ly = pad.t + ph * (1 - Math.max(0, Math.min(yMax, last.v)) / yMax);
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(lx, ly, pts.length < 3 ? 4 : 2.4, 0, Math.PI * 2);
+    ctx.fill();
   });
   drawHover(ctx, canvas, { pad, pw, ph, t0, t1, yMax, field, series: packed.series });
 }
@@ -693,7 +792,7 @@ function render() {
       }).join("") + `</tbody></table></div>` : `<div class="empty">当前没有在跑作业</div>`) +
     `</article>`;
   $("view-resources").innerHTML = resourcePage(clusters);
-  const jobBody = jobs.length ? jobs.map(({ job, label }) => jobMode === "curves" && (job.gpus || []).length ? curveCard(job, label) : jobCard(job, label)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
+  const jobBody = jobs.length ? jobs.map(({ job, label }) => jobMode === "curves" && (/gpu/i.test(job.gres || "") || /gpu/i.test(job.partition || "") || gpuSeries(job.id).length) ? curveCard(job, label) : jobCard(job, label)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
   $("view-jobs").innerHTML = `<div class="actions" style="margin-bottom:12px"><button type="button" data-mode="cards" class="${jobMode === "curves" ? "" : "primary"}">卡片</button><button type="button" data-mode="curves" class="${jobMode === "curves" ? "primary" : ""}">曲线</button><span class="hint">曲线每 5 秒采样，最近 6 小时留在本机</span></div>${jobBody}`;
   document.querySelectorAll("[data-mode]").forEach((btn) => btn.onclick = () => { jobMode = btn.dataset.mode; localStorage.setItem("scuthpc-job-mode", jobMode); render(); });
   $("view-history").innerHTML = `<article class="card"><h2>近两日作业</h2>${historyTable(recent.slice(-24))}<p class="hint">作业号跳转到门户历史页，门户里可以看完整日志。</p></article>`;

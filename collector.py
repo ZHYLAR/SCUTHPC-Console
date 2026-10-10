@@ -55,7 +55,7 @@ _disk_lock = threading.Lock()
 _disk_running = False
 
 REMOTE = r"""
-import json, os, re, subprocess
+import json, os, re, subprocess, datetime
 
 def run(args, timeout=30):
     try:
@@ -71,6 +71,19 @@ def field(line, key):
     m = re.search(r"(?:^|\s)%s=(\S+)" % re.escape(key), line)
     return m.group(1) if m else ""
 
+def valid_job_id(value):
+    # Slurm array elements are reported as JOBID_TASKID, for example 414779_3.
+    return bool(re.fullmatch(r"\d+(?:_\d+)?", value or ""))
+
+def srun_into(jid, nodelist):
+    # Slurm 20.11 rejects --jobid=415445_2. Use the array job id and pin the task node.
+    base, _, task = (jid or "").partition("_")
+    cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
+    node = (nodelist or "").split(",")[0]
+    if task and node and node not in ("None", "(null)"):
+        cmd.extend(["-w", node])
+    return cmd
+
 def tres_gpu(tres):
     if not tres or tres == "(null)":
         return 0
@@ -79,6 +92,23 @@ def tres_gpu(tres):
         return sum(int(x) for x in plain)
     nums = [int(x) for x in re.findall(r"gres/(?:gpu|dcu):[^=,]+=(\d+)", tres)]
     return sum(nums)
+
+def tres_mem_mb(tres):
+    m = re.search(r"(?:^|,)mem=(\d+)([KMGTP]?)", tres or "")
+    if not m:
+        return 0
+    value = float(m.group(1))
+    scale = {"": 1/1024, "K": 1/1024, "M": 1, "G": 1024, "T": 1024*1024}[m.group(2).upper()]
+    return int(value * scale)
+
+def parse_test_start(text):
+    m = re.search(r"to start at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})", text or "")
+    if not m:
+        return None
+    try:
+        return datetime.datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").timestamp()
+    except ValueError:
+        return None
 
 def gpu_label(gres):
     if not gres or gres == "(null)":
@@ -180,6 +210,8 @@ for line in text.splitlines():
     part = parts.split(",")[0].rstrip("*") if parts and parts != "(null)" else "unknown"
     gpu_tot = tres_gpu(cfg)
     gpu_used = min(tres_gpu(alloc), gpu_tot) if gpu_tot else tres_gpu(alloc)
+    mem_alloc = tres_mem_mb(alloc)
+    sched_mem_free = max(mem - mem_alloc, 0)
     bad = unavailable(state)
     nodes.append({
         "name": field(line, "NodeName"),
@@ -198,8 +230,34 @@ for line in text.splitlines():
         "load": round(load, 2),
         "mem_mb": mem,
         "free_mem_mb": free_mem if not bad else 0,
+        "sched_mem_free_mb": sched_mem_free if not bad else 0,
     })
 out["nodes"] = nodes
+
+# A node-capacity calculation cannot account for Slurm priority, reservations,
+# account/QOS limits, or backfill. Ask Slurm's scheduler for the actual start
+# time of the default one-GPU request and expose it separately.
+probe_cores = 9 if "kapok1" in cluster_id.lower() else 8
+probe = ["srun", "--test-only", "-p", "gpuA800", "--gres=gpu:1", "-c", str(probe_cores),
+         "--mem=24G", "-t", "00:10:00", "true"]
+probe_rc, probe_text, probe_err = run(probe, 40)
+probe_start = parse_test_start((probe_text or "") + "\n" + (probe_err or ""))
+now = datetime.datetime.now().timestamp()
+probe_delay = max(0, int(probe_start - now)) if probe_start else None
+# Distant dates usually mean Slurm cannot form a finite estimate, for example
+# when an unlimited-time job blocks the next usable node.
+probe_reliable = probe_delay is not None and probe_delay <= 7 * 86400
+out["placement_probe"] = {
+    "request": {"partition": "gpuA800", "gpus": 1, "cpus": probe_cores, "mem_mb": 24576, "time_sec": 600},
+    "ok": probe_rc == 0,
+    "start_time": datetime.datetime.fromtimestamp(probe_start).isoformat(timespec="seconds") if probe_start else None,
+    "observed_at": datetime.datetime.fromtimestamp(now).isoformat(timespec="seconds"),
+    "delay_seconds": probe_delay,
+    "immediate": bool(probe_start is not None and probe_start <= now + 120),
+    "reliable": probe_reliable,
+    "confidence": "high" if probe_start and probe_start <= now + 120 else ("medium" if probe_reliable else "low"),
+    "message": ((probe_text or "") + "\n" + (probe_err or "")).strip()[-400:],
+}
 
 rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%M|%l|%D|%C|%m|%b|%R|%N"], 25)
 jobs = []
@@ -208,7 +266,7 @@ for line in text.splitlines():
     if len(bits) < 12:
         continue
     jid, name, part, state, elapsed, limit, nodes_n, cpus, mem, gres, reason, nodelist = bits[:12]
-    if not jid.isdigit():
+    if not valid_job_id(jid):
         continue
     jobs.append({
         "id": jid,
@@ -225,6 +283,9 @@ for line in text.splitlines():
         "gres": gres if gres != "N/A" else "",
         "reason": reason,
         "nodelist": nodelist if nodelist != "None" else "",
+        "start_time": None,
+        "queue_delay_seconds": None,
+        "queue_estimate_reliable": False,
         "workdir": "",
         "stdout": "",
         "gpus": [],
@@ -240,6 +301,16 @@ for job in jobs:
     line = text.strip().splitlines()[0] if text.strip() else ""
     if line:
         job["workdir"] = field(line, "WorkDir")
+        start_text = field(line, "StartTime")
+        if job["state"] == "PENDING" and start_text not in ("", "Unknown", "N/A", "None"):
+            try:
+                start_dt = datetime.datetime.strptime(start_text, "%Y-%m-%dT%H:%M:%S")
+                start_ts = start_dt.timestamp()
+                job["start_time"] = start_dt.isoformat(timespec="seconds")
+                job["queue_delay_seconds"] = max(0, int(start_ts - now))
+                job["queue_estimate_reliable"] = job["queue_delay_seconds"] <= 7 * 86400
+            except ValueError:
+                pass
         stdout = field(line, "StdOut")
         job["stdout"] = stdout
         if job["state"] == "RUNNING" and stdout.startswith("/") and os.path.isfile(stdout):
@@ -266,10 +337,7 @@ for job in jobs:
             "ps -u \"$USER\" -o pcpu=,rss= --no-headers | "
             "awk '{c+=$1;r+=$2;n++} END{printf \"%.1f %.0f %d\\n\", c+0, r+0, n+0}'"
         )
-        rc, text, err = run([
-            "srun", "--jobid=" + job["id"], "--overlap", "-N1", "-n1", "--ntasks=1",
-            "bash", "-lc", probe,
-        ], 45)
+        rc, text, err = run(srun_into(job["id"], job.get("nodelist")) + ["bash", "-lc", probe], 45)
         if rc != 0 and "@@" not in text:
             job["metrics_error"] = (err or text or "srun failed").strip().splitlines()[-1][:240]
         else:
@@ -321,7 +389,7 @@ rc, text, err = run([
 recent = []
 for line in text.splitlines():
     bits = line.split("|")
-    if len(bits) < 9 or not bits[0].isdigit():
+    if len(bits) < 9 or not valid_job_id(bits[0]):
         continue
     recent.append({
         "id": bits[0],
@@ -456,6 +524,7 @@ def _summarize(cluster: dict) -> dict:
                 "gpu_offline": 0,
                 "gpu_label": "",
                 "free_mem_mb": 0,
+                "sched_mem_free_mb": 0,
             },
         )
         bucket["nodes"] += 1
@@ -470,7 +539,7 @@ def _summarize(cluster: dict) -> dict:
             bucket["mix_nodes"] += 1
         elif st == "alloc":
             bucket["alloc_nodes"] += 1
-        for key in ("cpu_total", "cpu_free", "cpu_used", "gpu_total", "gpu_free", "gpu_used", "gpu_offline", "free_mem_mb"):
+        for key in ("cpu_total", "cpu_free", "cpu_used", "gpu_total", "gpu_free", "gpu_used", "gpu_offline", "free_mem_mb", "sched_mem_free_mb"):
             src = "free_mem_mb" if key == "free_mem_mb" else key
             bucket[key] += node[src]
         if node["gpu_label"] and not bucket["gpu_label"]:
@@ -492,6 +561,7 @@ def _summarize(cluster: dict) -> dict:
         "nodes": sum(p["nodes"] for p in order),
         "online": sum(p["online"] for p in order),
         "offline": sum(p["offline"] for p in order),
+        "sched_mem_free_mb": sum(p["sched_mem_free_mb"] for p in order),
     }
     return cluster
 
@@ -637,18 +707,25 @@ def run(args, timeout=30):
 
 user = os.environ.get("USER") or ""
 jobs = []
-rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%b"], 20)
+def srun_into(jid, nodelist):
+    base, _, task = (jid or "").partition("_")
+    cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
+    node = (nodelist or "").split(",")[0]
+    if task and node and node not in ("None", "(null)"):
+        cmd.extend(["-w", node])
+    return cmd
+
+rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%b|%N"], 20)
 for line in text.splitlines():
     bits = line.split("|")
-    if len(bits) < 5 or not bits[0].isdigit():
+    if len(bits) < 6 or not re.fullmatch(r"\d+(?:_\d+)?", bits[0] or ""):
         continue
-    jid, name, part, state, gres = bits[:5]
+    jid, name, part, state, gres, nodelist = bits[:6]
     if state != "RUNNING":
         continue
     if "gpu" not in (gres or "").lower() and not part.lower().startswith("gpu"):
         continue
-    rc, gpu_txt, err = run([
-        "srun", "--jobid=" + jid, "--overlap", "-N1", "-n1", "--ntasks=1",
+    rc, gpu_txt, err = run(srun_into(jid, nodelist) + [
         "nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total",
         "--format=csv,noheader,nounits",
     ], 25)
