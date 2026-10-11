@@ -161,8 +161,8 @@
     pointer-events: auto;
     transform: translateY(0);
   }
-  .probe-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #fff8eb; border: 1px solid #f3ddb0; }
-  .probe-note strong { color: var(--text); }
+  .probe-note { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .probe-note strong { font-weight: 600; color: var(--muted); }
   @media (max-width: 800px) {
     .job, .kpis { grid-template-columns: 1fr; }
     .notice-fab { right: 10px; }
@@ -199,7 +199,7 @@
   <button class="notice-fab" type="button" aria-label="查看调度预测说明" title="调度预测说明">!</button>
   <div class="notice-popover" role="note">
     <strong>注意：空卡不等于立即可用</strong><br />
-    物理可放置只表示 GPU、CPU 和内存能在同一节点凑齐。实际启动还受优先级、backfill、前序作业时限、账户/QOS、维护和调度刷新影响。预计排队时间会提前或延后；远期或无限时限作业造成的时间会标为“无法可靠估计”。
+    物理可放置只表示 GPU、CPU 和内存能在同一节点凑齐。排队时间来自 Slurm 的预计启动时刻减去当前时间，受优先级、backfill 和前序作业影响，实测偏差很大，只能当粗参考。
   </div>
 </div>
 <script>
@@ -257,22 +257,22 @@ function formatProbeTime(iso) {
 function probeText(c) {
   const p = c.placement_probe;
   if (!p) return "";
-  const req = p.request || {};
-  const requestText = `1卡/${req.cpus || 8}核/${Math.round((req.mem_mb || 24576) / 1024)}GiB/${Math.round((req.time_sec || 600) / 60)}分钟`;
-  if (!p.ok) return `<div class="probe-note"><strong>调度探针失败</strong><br /><span class="hint">${esc(p.message || "暂时无法获得预测")}</span></div>`;
-  if (!p.reliable) return `<div class="probe-note"><strong>调度预测：无法可靠估计</strong><br /><span class="hint">探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。可能存在无限时限或超长任务。</span></div>`;
-  if (p.immediate) return `<div class="probe-note"><strong class="ok">预计可立即启动</strong><br /><span class="hint">探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。实际时间仍可能变化。</span></div>`;
-  const delay = p.delay_seconds == null ? "需排队" : "约 " + formatDuration(p.delay_seconds);
-  return `<div class="probe-note"><strong class="warn">预计排队 ${esc(delay)}</strong><br /><span class="hint">预计 ${esc(formatProbeTime(p.start_time))} · 探针 ${esc(requestText)} · 更新于 ${esc(formatProbeTime(p.observed_at))}。这不是保证时间。</span></div>`;
+  const how = "srun --test-only 的预计启动时刻减当前时间，偏差很大";
+  if (!p.ok) return `<p class="hint">探针失败：${esc(p.message || "暂时无法获得预测")}。${esc(how)}。</p>`;
+  if (!p.reliable) return `<p class="hint">探针未给出可用时间。${esc(how)}。</p>`;
+  if (p.immediate) return `<p class="hint">探针显示可立即启动。${esc(how)}。</p>`;
+  const delay = p.delay_seconds == null ? "需排队" : formatDuration(p.delay_seconds);
+  return `<p class="hint">探针约 ${esc(delay)}。${esc(how)}。</p>`;
 }
 function queueEstimateText(job) {
   if (job.state !== "PENDING") return "";
-  const reason = job.reason && job.reason !== "None" ? ` · 原因 ${esc(job.reason)}` : "";
+  const reason = job.reason && job.reason !== "None" ? ` · ${esc(job.reason)}` : "";
+  const how = "scontrol 的 StartTime 减当前时间，偏差可能很大";
   if (!job.start_time || !job.queue_estimate_reliable) {
-    return `<div class="probe-note"><strong>排队预估：暂时无法可靠估计</strong><br /><span class="hint">${reason || "Slurm 尚未给出确定的启动时间"}。作业状态会随调度刷新变化。</span></div>`;
+    return `<p class="hint">排队预估暂不可用${reason}。${how}。</p>`;
   }
-  const delay = job.queue_delay_seconds == null ? "需排队" : "约 " + formatDuration(job.queue_delay_seconds);
-  return `<div class="probe-note"><strong class="warn">排队预估：${esc(delay)}</strong><br /><span class="hint">预计 ${esc(formatProbeTime(job.start_time))}${reason}。这不是保证时间。</span></div>`;
+  const delay = job.queue_delay_seconds == null ? "需排队" : formatDuration(job.queue_delay_seconds);
+  return `<p class="hint">排队预估约 ${esc(delay)}${reason}。${how}。</p>`;
 }
 function etaFromLine(line, cur, tot) {
   const stamp = line.match(/<(\d+-\d+:\d+:\d+|\d+:\d+:\d+|\d+:\d+)/);
@@ -346,7 +346,7 @@ function comboBlock(c) {
     ? `<p class="hint">空卡但 CPU 或内存不够，单机放不上：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核 / ${fmtBytes((r.n.sched_mem_free_mb || 0) * 1024 * 1024)}`).join("，")}</p>`
     : "";
   const max = ok.reduce((m, r) => Math.max(m, r.cards), 0);
-  return `<h2 style="margin-top:14px">资源可放置 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">物理可放置 ≠ 立即启动；下方另列 Slurm 调度探针。</p>${probeText(c)}${lines || `<p class="hint">现在没有满足 GPU/CPU/内存的单机组合</p>`}${blockedHtml}`;
+  return `<h2 style="margin-top:14px">资源可放置 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">物理可放置 ≠ 立即启动。</p>${probeText(c)}${lines || `<p class="hint">现在没有满足 GPU/CPU/内存的单机组合</p>`}${blockedHtml}`;
 }
 const lowStreak = {};
 function stuckCount(job) {
