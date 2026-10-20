@@ -71,16 +71,44 @@ def field(line, key):
     m = re.search(r"(?:^|\s)%s=(\S+)" % re.escape(key), line)
     return m.group(1) if m else ""
 
-def valid_job_id(value):
-    # Slurm array elements are reported as JOBID_TASKID, for example 414779_3.
-    return bool(re.fullmatch(r"\d+(?:_\d+)?", value or ""))
+SEP = "\x1f"
+
+def job_anchor(value):
+    match = re.match(r"\s*(\d+)", value or "")
+    return match.group(1) if match else ""
+
+def is_job_row(value):
+    # Agent 提交的作业号无法约定：数组、异构、打包都可能带后缀。
+    # 能从行首取出数字作业号就纳入；步（.batch/.extern）不是独立作业。
+    text = (value or "").strip()
+    if not text or text.upper().startswith("JOBID"):
+        return False
+    if "." in text:
+        return False
+    return bool(job_anchor(text))
+
+def slurm_lookup_id(value):
+    return job_anchor(value) or (value or "").strip()
+
+def split_job(line, n, name_index=1):
+    if SEP in line:
+        bits = line.split(SEP)
+    else:
+        bits = line.split("|")
+        if len(bits) > n:
+            tail_n = n - name_index - 1
+            name = "|".join(bits[name_index:len(bits) - tail_n])
+            bits = bits[:name_index] + [name] + bits[-tail_n:]
+    if len(bits) < n:
+        bits = bits + [""] * (n - len(bits))
+    return bits[:n]
 
 def srun_into(jid, nodelist):
-    # Slurm 20.11 rejects --jobid=415445_2. Use the array job id and pin the task node.
-    base, _, task = (jid or "").partition("_")
+    # Slurm 20.11 只接受数字作业号。数组、异构组件用主号，并钉在该任务节点上。
+    base = slurm_lookup_id(jid)
     cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
     node = (nodelist or "").split(",")[0]
-    if task and node and node not in ("None", "(null)"):
+    if base and jid.strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
     return cmd
 
@@ -259,14 +287,14 @@ out["placement_probe"] = {
     "message": ((probe_text or "") + "\n" + (probe_err or "")).strip()[-400:],
 }
 
-rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%M|%l|%D|%C|%m|%b|%R|%N"], 25)
+rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i" + SEP + "%j" + SEP + "%P" + SEP + "%T" + SEP + "%M" + SEP + "%l" + SEP + "%D" + SEP + "%C" + SEP + "%m" + SEP + "%b" + SEP + "%R" + SEP + "%N"], 25)
 jobs = []
 for line in text.splitlines():
-    bits = line.split("|")
-    if len(bits) < 12:
+    if not line.strip():
         continue
-    jid, name, part, state, elapsed, limit, nodes_n, cpus, mem, gres, reason, nodelist = bits[:12]
-    if not valid_job_id(jid):
+    bits = split_job(line, 12)
+    jid, name, part, state, elapsed, limit, nodes_n, cpus, mem, gres, reason, nodelist = bits
+    if not is_job_row(jid):
         continue
     jobs.append({
         "id": jid,
@@ -297,7 +325,7 @@ for line in text.splitlines():
     })
 
 for job in jobs:
-    rc, text, err = run(["scontrol", "-o", "show", "job", job["id"]], 20)
+    rc, text, err = run(["scontrol", "-o", "show", "job", slurm_lookup_id(job["id"])], 20)
     line = text.strip().splitlines()[0] if text.strip() else ""
     if line:
         job["workdir"] = field(line, "WorkDir")
@@ -388,8 +416,10 @@ rc, text, err = run([
 ], 25)
 recent = []
 for line in text.splitlines():
-    bits = line.split("|")
-    if len(bits) < 9 or not valid_job_id(bits[0]):
+    if not line.strip():
+        continue
+    bits = split_job(line, 9)
+    if not is_job_row(bits[0]):
         continue
     recent.append({
         "id": bits[0],
@@ -707,20 +737,47 @@ def run(args, timeout=30):
 
 user = os.environ.get("USER") or ""
 jobs = []
+SEP = "\x1f"
+
+def job_anchor(value):
+    match = re.match(r"\s*(\d+)", value or "")
+    return match.group(1) if match else ""
+
+def is_job_row(value):
+    text = (value or "").strip()
+    if not text or text.upper().startswith("JOBID") or "." in text:
+        return False
+    return bool(job_anchor(text))
+
+def split_job(line, n, name_index=1):
+    if SEP in line:
+        bits = line.split(SEP)
+    else:
+        bits = line.split("|")
+        if len(bits) > n:
+            tail_n = n - name_index - 1
+            name = "|".join(bits[name_index:len(bits) - tail_n])
+            bits = bits[:name_index] + [name] + bits[-tail_n:]
+    if len(bits) < n:
+        bits = bits + [""] * (n - len(bits))
+    return bits[:n]
+
 def srun_into(jid, nodelist):
-    base, _, task = (jid or "").partition("_")
+    base = job_anchor(jid) or (jid or "").strip()
     cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
     node = (nodelist or "").split(",")[0]
-    if task and node and node not in ("None", "(null)"):
+    if base and (jid or "").strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
     return cmd
 
-rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i|%j|%P|%T|%b|%N"], 20)
+rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i" + SEP + "%j" + SEP + "%P" + SEP + "%T" + SEP + "%b" + SEP + "%N"], 20)
 for line in text.splitlines():
-    bits = line.split("|")
-    if len(bits) < 6 or not re.fullmatch(r"\d+(?:_\d+)?", bits[0] or ""):
+    if not line.strip():
         continue
-    jid, name, part, state, gres, nodelist = bits[:6]
+    bits = split_job(line, 6)
+    if not is_job_row(bits[0]):
+        continue
+    jid, name, part, state, gres, nodelist = bits
     if state != "RUNNING":
         continue
     if "gpu" not in (gres or "").lower() and not part.lower().startswith("gpu"):
