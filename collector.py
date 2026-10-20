@@ -494,6 +494,38 @@ print(json.dumps(out))
 """
 
 
+def _run_ssh(host: str, script: bytes, timeout: float) -> subprocess.CompletedProcess:
+    try:
+        settings = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+    extra = settings.get("ssh_fallbacks", {}).get(host, [])
+    if not isinstance(extra, list):
+        extra = []
+    targets = [host] + [str(item).strip() for item in extra if str(item).strip()]
+    deadline = time.monotonic() + timeout
+    last = None
+    for _attempt in range(2):
+        for target in targets:
+            remaining = deadline - time.monotonic()
+            if remaining <= 1:
+                break
+            try:
+                last = subprocess.run(
+                    ["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", target, "bash", "-s"],
+                    input=script,
+                    capture_output=True,
+                    timeout=remaining,
+                )
+            except subprocess.TimeoutExpired:
+                continue
+            if last.returncode != 255:
+                return last
+    if last is not None:
+        return last
+    raise subprocess.TimeoutExpired("ssh", timeout)
+
+
 def _ssh(host: str, cluster_id: str) -> dict:
     script = (
         f"export CLUSTER_ID={cluster_id}\n"
@@ -502,21 +534,7 @@ def _ssh(host: str, cluster_id: str) -> dict:
         + "\nHPC_MONITOR_PY\n"
     ).encode()
     try:
-        proc = subprocess.run(
-            [
-                "ssh",
-                "-o",
-                "ConnectTimeout=20",
-                "-o",
-                "BatchMode=yes",
-                host,
-                "bash",
-                "-s",
-            ],
-            input=script,
-            capture_output=True,
-            timeout=SSH_TIMEOUT,
-        )
+        proc = _run_ssh(host, script, SSH_TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"ok": False, "id": cluster_id, "error": "SSH 超时"}
     except Exception as exc:
@@ -627,7 +645,10 @@ def _query_disk(host: str) -> dict | None:
     script = r"""
 out=/tmp/scuthpc-du-$USER.txt
 pidf=/tmp/scuthpc-du-$USER.pid
-if [ -s "$out" ]; then cat "$out"; fi
+if [ -s "$out" ]; then
+  cat "$out"
+  printf "SAMPLED_AT=%s\n" "$(stat -c %Y "$out")"
+fi
 if [ -f "$pidf" ] && kill -0 "$(cat "$pidf")" 2>/dev/null; then
   printf "PATH=%s\n" "$HOME"
   exit 0
@@ -642,17 +663,17 @@ fi
 printf "PATH=%s\n" "$HOME"
 """.encode()
     try:
-        proc = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", host, "bash", "-s"],
-            input=script,
-            capture_output=True,
-            timeout=30,
-        )
+        proc = _run_ssh(host, script, 30)
     except (OSError, subprocess.TimeoutExpired):
         return None
     used = None
     path = ""
+    sampled_at = None
     for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        if line.startswith("SAMPLED_AT="):
+            value = line.split("=", 1)[1].strip()
+            sampled_at = int(value) if value.isdigit() else None
+            continue
         if line.startswith("PATH="):
             path = line.split("=", 1)[1].strip()
             continue
@@ -662,7 +683,7 @@ printf "PATH=%s\n" "$HOME"
     if used is None:
         return None
     pct = min(100.0, round(used / QUOTA_BYTES * 100, 1))
-    return {"used": used, "quota": QUOTA_BYTES, "pct": pct, "path": path}
+    return {"used": used, "quota": QUOTA_BYTES, "pct": pct, "path": path, "sampled_at": sampled_at}
 
 
 def _refresh_disk() -> None:
@@ -818,11 +839,10 @@ def gpu_sample() -> dict:
 
         def one(host, cid, label):
             try:
-                proc = subprocess.run(
-                    ["ssh", "-o", "ConnectTimeout=20", "-o", "BatchMode=yes", host, "bash", "-s"],
-                    input=("python3 - <<'GPU_REMOTE_PY'\n" + GPU_REMOTE + "\nGPU_REMOTE_PY\n").encode(),
-                    capture_output=True,
-                    timeout=40,
+                proc = _run_ssh(
+                    host,
+                    ("python3 - <<'GPU_REMOTE_PY'\n" + GPU_REMOTE + "\nGPU_REMOTE_PY\n").encode(),
+                    40,
                 )
             except (OSError, subprocess.TimeoutExpired):
                 return []

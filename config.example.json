@@ -11,6 +11,10 @@
       "label": "集群 2 · hpckapok2"
     }
   ],
+  "ssh_fallbacks": {
+    "scut-hpc1": ["scut-hpc1-backup"],
+    "scut-hpc": ["scut-hpc-backup"]
+  },
   "links": {
     "jobs": "https://hpckapok.scut.edu.cn/mis/user/historyJobs",
     "files": "https://hpckapok.scut.edu.cn/files/cluster_login2/public/home/{user}"

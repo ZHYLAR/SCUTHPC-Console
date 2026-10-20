@@ -394,8 +394,8 @@ function resourcePage(clusters) {
     }).join("");
     const disk = c.disk;
     const diskHtml = disk
-      ? `<p class="hint">个人免费配额 ${fmtBytes(disk.used)} / 1 TB · ${esc(disk.path || "")}</p>${bar(disk.pct, disk.pct > 80 ? "warn" : "")}`
-      : `<p class="hint">个人免费配额 1 TB，用量统计中</p>`;
+      ? `<p class="hint">家目录 ${fmtBytes(disk.used)} / 1 TB 免费额度参考 · ${esc(disk.path || "")}${disk.sampled_at ? " · 采样于 " + esc(ago(disk.sampled_at)) : ""}</p>${bar(disk.pct, disk.pct > 80 ? "warn" : "")}`
+      : `<p class="hint">家目录用量统计中 · 1 TB 免费额度参考</p>`;
     return `<article class="card">
       <h2>${esc(c.label)}</h2>
       ${comboBlock(c)}
