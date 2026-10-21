@@ -34,14 +34,24 @@ class Transport:
 
     def run(self, argv: Sequence[str], *, input_text: str | None = None) -> CommandResult:
         command = self._remote_argv(argv) if self.config.ssh_alias else [str(item) for item in argv]
+        # Pass stdin as bytes so Windows does not translate the generated
+        # Slurm batch script's LF line endings to CRLF.  Slurm rejects CRLF
+        # scripts with "Batch script contains DOS line breaks".
+        input_bytes = None
+        if input_text is not None:
+            input_bytes = input_text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
         completed = subprocess.run(
             command,
-            input=input_text,
-            text=True,
+            input=input_bytes,
             capture_output=True,
             check=False,
         )
-        return CommandResult(completed.returncode, completed.stdout, completed.stderr)
+        def decode(value: bytes | str | None) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", "replace")
+            return value or ""
+
+        return CommandResult(completed.returncode, decode(completed.stdout), decode(completed.stderr))
 
     def interactive(self, argv: Sequence[str]) -> int:
         tty = "--pty" in argv
