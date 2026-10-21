@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_HOSTS = (
     ("scut-hpc1", "hpckapok1", "集群 1 · hpckapok1"),
@@ -106,7 +108,7 @@ def split_job(line, n, name_index=1):
 def srun_into(jid, nodelist):
     # Slurm 20.11 只接受数字作业号。数组、异构组件用主号，并钉在该任务节点上。
     base = slurm_lookup_id(jid)
-    cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
+    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe", "-N1", "-n1", "--ntasks=1"]
     node = (nodelist or "").split(",")[0]
     if base and jid.strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
@@ -785,7 +787,7 @@ def split_job(line, n, name_index=1):
 
 def srun_into(jid, nodelist):
     base = job_anchor(jid) or (jid or "").strip()
-    cmd = ["srun", "--jobid=" + base, "--overlap", "-N1", "-n1", "--ntasks=1"]
+    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe", "-N1", "-n1", "--ntasks=1"]
     node = (nodelist or "").split(",")[0]
     if base and (jid or "").strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
@@ -870,3 +872,624 @@ def gpu_sample() -> dict:
         return data
     finally:
         _gpu_lock.release()
+
+
+def load_slurmbox_projects(path: Path | None = None) -> list[dict]:
+    path = path or (ROOT / "config.json")
+    if not path.is_file():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    found = []
+    for item in (raw.get("slurmbox") or {}).get("projects") or []:
+        if not isinstance(item, dict):
+            continue
+        root = str(item.get("root") or "").strip()
+        if not root:
+            continue
+        root_path = Path(root).expanduser()
+        if not root_path.is_absolute():
+            root = str((ROOT / root_path).resolve())
+        entry = {"name": str(item.get("name") or "").strip(), "root": root}
+        remote_workdir = str(item.get("remote_workdir") or "").strip()
+        if remote_workdir:
+            entry["remote_workdir"] = remote_workdir
+        found.append(entry)
+    return found
+
+
+def sandbox_options() -> dict:
+    """Return safe defaults used by the dashboard allocation form."""
+    hosts, _links = load_settings()
+    projects = load_slurmbox_projects()
+    clusters = []
+    for ssh, cid, label in hosts:
+        clusters.append({
+            "ssh_alias": ssh,
+            "id": cid,
+            "label": label,
+            "partition": "gpuA800",
+            "cores_per_gpu": 9 if cid.lower() == "hpckapok1" else 8,
+            "mem_gib_per_gpu": 24,
+            "max_gpus": 4 if cid.lower() == "hpckapok1" else 8,
+        })
+    return {
+        "clusters": clusters,
+        "projects": [{"name": p.get("name") or Path(p["root"]).name, "root": p["root"],
+                      **({"remote_workdir": p["remote_workdir"]} if p.get("remote_workdir") else {})}
+                     for p in projects],
+        "duration_minutes": [3, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320],
+    }
+
+
+def split_fields(line: str, n: int, name_index: int = 1) -> list[str]:
+    if "\x1f" in line:
+        bits = line.split("\x1f")
+    else:
+        bits = line.split("|")
+        if len(bits) > n:
+            tail_n = n - name_index - 1
+            if tail_n > 0:
+                name = "|".join(bits[name_index:len(bits) - tail_n])
+                bits = bits[:name_index] + [name] + bits[-tail_n:]
+            else:
+                bits = bits[:name_index] + ["|".join(bits[name_index:])]
+    if len(bits) < n:
+        bits = bits + [""] * (n - len(bits))
+    return bits[:n]
+
+
+def step_kind(step_id: str) -> str:
+    if "." not in (step_id or ""):
+        return "job"
+    suffix = step_id.split(".", 1)[1]
+    if suffix == "batch":
+        return "keepalive"
+    if suffix.isdigit():
+        return "task"
+    return "system"
+
+
+def slurm_seconds(text: str) -> int | None:
+    text = (text or "").strip()
+    if not text or text in ("UNLIMITED", "INVALID", "N/A", "Unknown", "NONE"):
+        return None
+    days = 0
+    if "-" in text:
+        day_text, text = text.split("-", 1)
+        try:
+            days = int(day_text)
+        except ValueError:
+            return None
+    try:
+        nums = [int(float(part)) for part in text.split(":")]
+    except ValueError:
+        return None
+    while len(nums) < 3:
+        nums.insert(0, 0)
+    hours, minutes, seconds = nums[-3], nums[-2], nums[-1]
+    return days * 86400 + hours * 3600 + minutes * 60 + seconds
+
+
+def parse_gpu_csv(text: str) -> list[dict]:
+    gpus = []
+    for row in (text or "").splitlines():
+        cols = [col.strip() for col in row.split(",")]
+        if len(cols) < 6 or not cols[0].isdigit():
+            continue
+        try:
+            gpus.append({
+                "index": int(cols[0]),
+                "util": float(cols[1]),
+                "mem_used": float(cols[2]),
+                "mem_total": float(cols[3]),
+                "temp": float(cols[4]),
+                "power": float(cols[5]),
+            })
+        except ValueError:
+            continue
+    return gpus
+
+
+def parse_queue_row(text: str) -> dict | None:
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        job_id, state, elapsed, limit, reason, nodelist, partition, name = split_fields(line, 8, 7)
+        if not job_id.strip():
+            continue
+        return {
+            "id": job_id.strip(),
+            "state": state,
+            "elapsed": elapsed,
+            "limit": limit,
+            "reason": reason,
+            "nodelist": "" if nodelist in ("", "None") else nodelist,
+            "partition": partition.rstrip("*"),
+            "name": name,
+            "elapsed_sec": slurm_seconds(elapsed),
+            "limit_sec": slurm_seconds(limit),
+        }
+    return None
+
+
+def parse_sacct(text: str) -> tuple[dict | None, list[dict]]:
+    job = None
+    steps = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        step_id, name, state, elapsed, exit_code, end, nodelist = split_fields(line, 7, 1)
+        kind = step_kind(step_id.strip())
+        row = {
+            "id": step_id.strip(),
+            "name": name,
+            "command": "",
+            "state": state,
+            "elapsed": elapsed,
+            "exit": exit_code,
+            "end": "" if end in ("", "Unknown", "None") else end,
+            "nodelist": "" if nodelist in ("", "None", "Unknown") else nodelist,
+            "elapsed_sec": slurm_seconds(elapsed),
+            "kind": kind,
+            "log": [],
+        }
+        if kind == "job":
+            job = row
+        elif kind != "system":
+            steps.append(row)
+    return job, steps
+
+
+def parse_live_steps(text: str) -> list[dict]:
+    found = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        step_id, name, elapsed, nodelist = split_fields(line, 4, 1)
+        kind = step_kind(step_id.strip())
+        if kind in ("job", "system"):
+            continue
+        found.append({
+            "id": step_id.strip(),
+            "name": name,
+            "elapsed": elapsed,
+            "nodelist": "" if nodelist in ("", "None") else nodelist,
+            "kind": kind,
+        })
+    return found
+
+
+_STEP_ID_RE = re.compile(r"(?:^|\s)StepId=(\S+)")
+_COMMAND_RE = re.compile(r"(?:^|\s)Command=(.*?)(?:\s+[A-Z][A-Za-z0-9]*=|$)")
+
+
+def parse_step_command(line: str) -> tuple[str, str]:
+    step_match = _STEP_ID_RE.search(line or "")
+    command_match = _COMMAND_RE.search(line or "")
+    command = command_match.group(1).strip() if command_match else ""
+    if command == "(null)":
+        command = ""
+    return (step_match.group(1) if step_match else ""), command
+
+
+def _step_sort_key(step: dict) -> tuple:
+    running = 0 if "RUN" in (step.get("state") or "").upper() else 1
+    suffix = str(step.get("id") or "").split(".", 1)[-1]
+    number = int(suffix) if suffix.isdigit() else -1
+    return (running, -number)
+
+
+def parse_sandbox_job(raw: dict | None) -> dict:
+    raw = raw or {}
+    live = parse_queue_row(str(raw.get("queue") or ""))
+    job_row, steps = parse_sacct(str(raw.get("sacct") or ""))
+    if live is None and job_row:
+        live = {
+            "id": job_row["id"],
+            "state": job_row["state"],
+            "elapsed": job_row["elapsed"],
+            "limit": "",
+            "reason": "",
+            "nodelist": job_row["nodelist"],
+            "partition": "",
+            "name": job_row["name"],
+            "elapsed_sec": job_row.get("elapsed_sec"),
+            "limit_sec": None,
+        }
+    by_id = {step["id"]: step for step in steps}
+    for live_step in parse_live_steps(str(raw.get("steps") or "")):
+        current = by_id.get(live_step["id"])
+        if current:
+            if live_step["elapsed"]:
+                current["elapsed"] = live_step["elapsed"]
+                current["elapsed_sec"] = slurm_seconds(live_step["elapsed"])
+            if live_step["nodelist"]:
+                current["nodelist"] = live_step["nodelist"]
+            if not current["state"]:
+                current["state"] = "RUNNING"
+            continue
+        current = {
+            "id": live_step["id"],
+            "name": live_step["name"],
+            "command": "",
+            "state": "RUNNING",
+            "elapsed": live_step["elapsed"],
+            "exit": "",
+            "end": "",
+            "nodelist": live_step["nodelist"],
+            "elapsed_sec": slurm_seconds(live_step["elapsed"]),
+            "kind": live_step["kind"],
+            "log": [],
+        }
+        by_id[current["id"]] = current
+        steps.append(current)
+    for line in raw.get("commands") or []:
+        step_id, command = parse_step_command(str(line))
+        if step_id in by_id and command:
+            by_id[step_id]["command"] = command
+    step_logs = raw.get("step_logs") if isinstance(raw.get("step_logs"), dict) else {}
+    for step in steps:
+        lines = step_logs.get(step["id"]) or []
+        step["log"] = [str(line)[:240] for line in lines if str(line).strip()][-12:]
+    steps.sort(key=_step_sort_key)
+    log = [str(line)[:240] for line in (raw.get("log") or []) if str(line).strip()][-20:]
+    return {
+        "live": live,
+        "steps": steps,
+        "log": log,
+        "gpus": parse_gpu_csv(str(raw.get("gpu") or "")),
+        "gpu_error": str(raw.get("gpu_error") or ""),
+        "error": str(raw.get("error") or ""),
+    }
+
+
+def _match_host(alias: str, hosts: tuple) -> tuple[str, str, str]:
+    for ssh, cid, label in hosts:
+        if ssh == alias:
+            return ssh, cid, label
+    return alias, "", alias
+
+
+def _box_from_project(project: dict, hosts: tuple, state_override: dict | None = None) -> dict:
+    root = Path(str(project.get("root") or "")).expanduser()
+    box = {
+        "name": project.get("name") or root.name or "SlurmBox",
+        "root": str(root),
+        "ok": True,
+        "error": "",
+        "local_status": "missing",
+        "job_id": "",
+        "ssh_alias": "",
+        "cluster_id": "",
+        "cluster_label": "",
+        "remote_workdir": "",
+        "allocation": {},
+        "live": None,
+        "steps": [],
+        "log": [],
+        "gpus": [],
+        "gpu_error": "",
+    }
+    if not root.is_dir():
+        box["ok"] = False
+        box["error"] = "项目目录不存在"
+        return box
+    state_file = root / ".slurmbox" / "state.json"
+    if state_override is not None:
+        state = state_override
+    elif not state_file.is_file():
+        return box
+    else:
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            box["ok"] = False
+            box["error"] = "无法读取 .slurmbox/state.json"
+            return box
+    if not isinstance(state, dict):
+        box["ok"] = False
+        box["error"] = "沙盒状态不是对象"
+        return box
+    cluster = state.get("cluster") if isinstance(state.get("cluster"), dict) else {}
+    config = state.get("config") if isinstance(state.get("config"), dict) else {}
+    alias = str(cluster.get("ssh_alias") or "")
+    job_id = str(state.get("job_id") or "")
+    workdir = str(cluster.get("remote_workdir") or "")
+    box["local_status"] = str(state.get("status") or "unknown")
+    box["ssh_alias"] = alias
+    box["remote_workdir"] = workdir
+    box["allocation"] = {
+        "job_name": str(config.get("job_name") or ""),
+        "partition": str(config.get("partition") or ""),
+        "gres": str(config.get("gres") or ""),
+        "cpus_per_task": config.get("cpus_per_task") or 0,
+        "time": str(config.get("time") or ""),
+        "mem": str(config.get("mem") or ""),
+    }
+    host, cid, label = _match_host(alias, hosts)
+    box["cluster_id"] = cid
+    box["cluster_label"] = label
+    if not job_id:
+        return box
+    if not job_id.isdigit():
+        box["ok"] = False
+        box["error"] = "状态里的作业号无效"
+        return box
+    box["job_id"] = job_id
+    if not alias:
+        box["error"] = "该沙盒使用本机 Slurm，控制台只读取 SSH 集群上的任务"
+        return box
+    if any(char in workdir for char in "\n\r\t\x00"):
+        box["ok"] = False
+        box["error"] = "remote_workdir 含有非法字符"
+        return box
+    box["query"] = {"host": host, "id": job_id, "workdir": workdir}
+    return box
+
+
+def _boxes_from_project(project: dict, hosts: tuple) -> list[dict]:
+    """Expand one project into one box per allocation, with legacy support."""
+    root = Path(str(project.get("root") or "")).expanduser()
+    state_file = root / ".slurmbox" / "state.json"
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8")) if state_file.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        return [_box_from_project(project, hosts)]
+    if not isinstance(state, dict) or not isinstance(state.get("allocations"), list):
+        return [_box_from_project(project, hosts, state)] if isinstance(state, dict) else [_box_from_project(project, hosts)]
+    allocations = [item for item in state["allocations"] if isinstance(item, dict)]
+    if not allocations:
+        return [_box_from_project(project, hosts, state)]
+    boxes = []
+    for item in allocations:
+        merged = dict(state)
+        merged.update(item)
+        boxes.append(_box_from_project(project, hosts, merged))
+    return boxes
+
+
+SANDBOX_REMOTE = r"""
+import base64, json, os, re, subprocess
+
+def run(args, timeout=20):
+    try:
+        p = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True, timeout=timeout)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except Exception as exc:
+        return 1, "", str(exc)
+
+def expand(path):
+    path = path or ""
+    if path == "~":
+        return os.path.expanduser("~")
+    if path.startswith("~/"):
+        return os.path.join(os.path.expanduser("~"), path[2:])
+    return path
+
+try:
+    jobs = json.loads(base64.b64decode(os.environ.get("SLURMBOX_JOBS_B64") or ""))
+except Exception:
+    jobs = []
+if not isinstance(jobs, list):
+    jobs = []
+
+SEP = "\x1f"
+out = {"jobs": {}}
+for job in jobs:
+    if not isinstance(job, dict):
+        continue
+    jid = str(job.get("id") or "")
+    item = {"queue": "", "sacct": "", "steps": "", "commands": [], "log": [], "step_logs": {}, "gpu": "", "gpu_error": "", "error": ""}
+    if not re.match(r"^\d+$", jid):
+        item["error"] = "invalid job id"
+        out["jobs"][jid or "?"] = item
+        continue
+    rc, text, err = run(["squeue", "-h", "-j", jid, "-o",
+                         "%i" + SEP + "%T" + SEP + "%M" + SEP + "%l" + SEP + "%R" + SEP + "%N" + SEP + "%P" + SEP + "%j"], 15)
+    item["queue"] = text
+    if rc != 0 and not text:
+        item["error"] = (err or "squeue failed")[:240]
+    rc, text, err = run(["sacct", "-j", jid, "-n", "-P",
+                         "--format=JobID,JobName,State,Elapsed,ExitCode,End,NodeList"], 20)
+    item["sacct"] = text
+    if rc != 0 and not text and not item["error"]:
+        item["error"] = (err or "sacct failed")[:240]
+    rc, text, err = run(["squeue", "-s", "-h", "-j", jid, "-o", "%i" + SEP + "%j" + SEP + "%M" + SEP + "%N"], 15)
+    if rc == 0:
+        item["steps"] = text
+    shown = 0
+    for line in (item["steps"] or "").splitlines():
+        step = line.split(SEP, 1)[0].strip()
+        if not re.match(r"^\d+\.\d+$", step):
+            continue
+        if shown >= 8:
+            break
+        shown += 1
+        rc, detail, err = run(["scontrol", "-o", "show", "step", step], 10)
+        if detail.strip():
+            item["commands"].append(detail.strip().splitlines()[0][:500])
+    def tail_file(path, limit):
+        try:
+            if os.path.isfile(path) and os.path.getsize(path) < 30000000:
+                rc, tail, err = run(["tail", "-n", str(limit), path], 8)
+                return [ln[:240] for ln in tail.splitlines() if ln.strip()][-limit:]
+        except OSError:
+            return []
+        return []
+
+    def field(line, key):
+        match = re.search(r"(?:^|\s)%s=(\S+)" % re.escape(key), line or "")
+        return match.group(1) if match else ""
+
+    rc, detail, err = run(["scontrol", "-o", "show", "job", jid], 15)
+    stdout = ""
+    if detail.strip():
+        stdout = field(detail.strip().splitlines()[0], "StdOut")
+    if stdout.startswith("/"):
+        item["log"] = tail_file(stdout, 20)
+    workdir = expand(str(job.get("workdir") or ""))
+    if not item["log"] and workdir:
+        item["log"] = tail_file(os.path.join(workdir, "slurmbox-" + jid + ".out"), 20)
+    log_dirs = []
+    if workdir:
+        log_dirs.append(os.path.join(workdir, "steps"))
+    job_dir = field(detail.strip().splitlines()[0], "WorkDir") if detail.strip() else ""
+    if job_dir.startswith("/"):
+        extra = os.path.join(job_dir, "steps")
+        if extra not in log_dirs:
+            log_dirs.append(extra)
+    logs = {}
+    stamps = {}
+    for step_dir in log_dirs:
+        try:
+            names = os.listdir(step_dir) if os.path.isdir(step_dir) else []
+        except OSError:
+            names = []
+        for fn in names:
+            if not (fn.startswith(jid + ".") and fn.endswith(".log")):
+                continue
+            path = os.path.join(step_dir, fn)
+            try:
+                stamp = os.path.getmtime(path)
+            except OSError:
+                continue
+            key = fn[:-4]
+            if key in stamps and stamp < stamps[key]:
+                continue
+            stamps[key] = stamp
+            logs[key] = tail_file(path, 12)
+    if len(logs) > 12:
+        keep = sorted(stamps, key=lambda key: stamps[key])[-12:]
+        logs = dict((key, logs[key]) for key in keep)
+    item["step_logs"] = logs
+    out["jobs"][jid] = item
+print(json.dumps(out))
+"""
+
+
+def _query_sandbox_host(host: str, boxes: list[dict]) -> dict:
+    jobs = [{"id": box["query"]["id"], "workdir": box["query"]["workdir"]} for box in boxes]
+    payload = base64.b64encode(json.dumps(jobs).encode()).decode()
+    script = (
+        "export SLURMBOX_JOBS_B64=%s\n" % payload
+        + "python3 - <<'SLURMBOX_PY'\n"
+        + SANDBOX_REMOTE
+        + "\nSLURMBOX_PY\n"
+    ).encode()
+    try:
+        proc = _run_ssh(host, script, 75)
+    except subprocess.TimeoutExpired:
+        return {"error": "SSH 超时", "jobs": {}}
+    except Exception as exc:
+        return {"error": str(exc)[:240], "jobs": {}}
+    raw = proc.stdout.decode("utf-8", "replace").strip()
+    if not raw:
+        err = proc.stderr.decode("utf-8", "replace").strip()
+        return {"error": err[-400:] or "无输出", "jobs": {}}
+    try:
+        data = json.loads(raw.splitlines()[-1])
+    except json.JSONDecodeError:
+        return {"error": raw[-400:], "jobs": {}}
+    if not isinstance(data, dict):
+        return {"error": "返回格式无效", "jobs": {}}
+    jobs_out = data.get("jobs")
+    if not isinstance(jobs_out, dict):
+        data["jobs"] = {}
+    return data
+
+
+def _collect_sandboxes() -> dict:
+    hosts, _links = load_settings()
+    boxes = [box for project in load_slurmbox_projects() for box in _boxes_from_project(project, hosts)]
+    groups: dict[str, list[dict]] = {}
+    for box in boxes:
+        query = box.get("query")
+        if query and query.get("host"):
+            groups.setdefault(query["host"], []).append(box)
+    if groups:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+            futures = [pool.submit(_query_sandbox_host, host, items) for host, items in groups.items()]
+            results = {host: future.result() for (host, _items), future in zip(groups.items(), futures)}
+        for box in boxes:
+            query = box.get("query")
+            if not query:
+                continue
+            host_result = results.get(query["host"]) or {"error": "无返回", "jobs": {}}
+            raw_job = (host_result.get("jobs") or {}).get(query["id"]) or {}
+            if host_result.get("error") and not raw_job:
+                raw_job = {"error": host_result["error"]}
+            parsed = parse_sandbox_job(raw_job)
+            box["live"] = parsed["live"]
+            box["steps"] = parsed["steps"]
+            box["log"] = parsed["log"]
+            box["gpus"] = parsed["gpus"]
+            box["gpu_error"] = parsed["gpu_error"]
+            if parsed["error"] and not box["error"]:
+                box["error"] = parsed["error"]
+                box["ok"] = False
+    for box in boxes:
+        box.pop("query", None)
+    return {"fetched_at": time.time(), "sandboxes": boxes}
+
+
+_sandbox_lock = threading.Lock()
+_sandbox_cache: dict = {"t": 0.0, "data": None}
+
+
+def sandbox_snapshot() -> dict:
+    now = time.time()
+    with _sandbox_lock:
+        cached = _sandbox_cache["data"]
+        if cached and now - _sandbox_cache["t"] < TTL_SEC:
+            return cached
+        data = _collect_sandboxes()
+        _sandbox_cache["t"] = time.time()
+        _sandbox_cache["data"] = data
+        return data
+
+
+def invalidate_sandbox_cache() -> None:
+    with _sandbox_lock:
+        _sandbox_cache["t"] = 0.0
+        _sandbox_cache["data"] = None
+
+
+_STEP_TARGET_RE = re.compile(r"^(\d+)\.(\d+)$")
+
+
+def sandbox_cancel_target(job_id: str, step_id: str) -> str:
+    job_id = str(job_id or "").strip()
+    step_id = str(step_id or "").strip()
+    match = _STEP_TARGET_RE.fullmatch(step_id)
+    if not job_id.isdigit() or match is None or match.group(1) != job_id:
+        raise ValueError("只能结束该沙盒分配里的用户步骤")
+    return step_id
+
+
+def sandbox_cancel_host(job_id: str) -> str:
+    hosts, _links = load_settings()
+    for project in load_slurmbox_projects():
+        for box in _boxes_from_project(project, hosts):
+            if box.get("job_id") == str(job_id) and box.get("ok") and box.get("query"):
+                return str(box["query"]["host"])
+    raise ValueError("这个作业不是已配置沙盒里的分配")
+
+
+def cancel_sandbox_step(job_id: str, step_id: str) -> dict:
+    step = sandbox_cancel_target(job_id, step_id)
+    host = sandbox_cancel_host(job_id)
+    try:
+        proc = _run_ssh(host, ("scancel " + step + "\n").encode(), 25)
+    except subprocess.TimeoutExpired:
+        raise ValueError("取消超时") from None
+    detail = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace").strip()
+    if proc.returncode != 0:
+        raise ValueError((detail or "scancel 失败")[:240])
+    invalidate_sandbox_cache()
+    return {"ok": True, "job_id": str(job_id).strip(), "step_id": step}

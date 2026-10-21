@@ -1,53 +1,116 @@
 # SCUTHPC Console
 
-本项目SCUTHPC Console 是华南理工大学科学计算平台的非官方本地状态控制台。它在你的计算机上通过 SSH 读取 [hpckapok1](https://hpckapok1.scut.edu.cn) 与 [hpckapok2](https://hpckapok2.scut.edu.cn) 的 Slurm 信息，在浏览器中呈现分区资源、在跑作业的显卡状态，以及近两日作业结果。方便实时跟踪和查阅实验进度。
+SCUTHPC Console 是一个面向华南理工大学高性能计算平台用户、由第三方开发的本地控制台综合应用。它把集群监控、SCUTHPC 使用指南和持久资源分配工具放在同一个开源项目中，让用户可以在浏览器里查看资源与作业状态，并在需要时申请一条可复用的 GPU 资源分配。
 
-服务只绑定本机。集群凭据留在 `~/.ssh`，不进入本仓库。
+项目默认监听 `127.0.0.1`。如果本机检测到 Tailscale，服务也会监听 Tailscale IPv4 地址，供同一 Tailnet 中的设备访问。集群凭据保留在本机 SSH 配置中，不写入项目文件。
 
-## 界面
+## 主要功能
 
-以下为样例数据。
+- **资源总览**：查看各集群、分区、节点和 GPU 的可用情况，并估算单节点可放置的 GPU 数量。
+- **作业监控**：查看正在运行和排队的作业，采集 GPU 利用率、显存、温度和功耗，并支持曲线查看。
+- **作业记录**：浏览近两日作业状态和日志摘要，保留本机采集到的短期 GPU 历史。
+- **盒（SlurmBox）**：申请一条持久 Slurm 资源分配，先申请资源，再通过独立命令提交多个运行步骤。某个子任务结束时，整条资源分配不会自动释放。
+- **集群使用 skill**：项目内置 SCUTHPC skill 和 SlurmBox skill，方便开发 agent 或用户查阅集群规则、资源选择和运行流程。
 
-<img src="docs/screenshots/overview.png" alt="总览样例：单机可交的卡数组合" width="1100">
+## 界面预览
 
-<img src="docs/screenshots/jobs.png" alt="在跑作业曲线样例：多卡利用率、显存和悬停读数" width="1100">
+以下截图使用样例数据：
 
-<img src="docs/screenshots/history.png" alt="作业记录样例：展开仍在缓存内的曲线" width="1100">
+<img src="docs/screenshots/overview.png" alt="资源总览" width="1100">
 
-四个分页约每 20 秒刷新一次。
+<img src="docs/screenshots/jobs.png" alt="作业 GPU 曲线" width="1100">
 
-- **总览**按单机作业显示资源可放置的卡数，并按「N 卡 × 几台」列出。计算同时扣除 GPU、CPU 和按默认 24 GiB/卡估算的调度内存。集群 1 的 A800 按 1 卡 9 核，集群 2 按 1 卡 8 核；空卡还在但 CPU/内存不够的节点单独标出。名称以 `emic`、`gznet`、`ex`、`telecom` 开头的分区不计入。
-- 总览另外运行一次按集群配核的 `srun --test-only` 调度探针，显示最近一次探测的预计启动时间、更新时间和可信度；“资源可放置”不等于“立即启动”。远期或无限时限作业造成的日期会显示为“无法可靠估计”。
-- 右侧注意按钮解释空卡、调度探针和实际启动时间之间的差异；预计排队时间会随优先级、backfill、前序作业和节点状态变化。
-- **集群资源**按分区给出在线节点、GPU 与 CPU 的空闲情况，并显示家目录用量，对照 1 TB 免费额度。
-- **在跑作业**可以在卡片和曲线之间切换。曲线每 5 秒采样利用率与显存，多卡各一条线，鼠标悬停显示该时刻的数值。
-- **作业记录**列出近两日作业。失败时附上日志末尾；6 小时内采过样的作业可以展开曲线。
+<img src="docs/screenshots/history.png" alt="作业记录" width="1100">
 
-右上角的作业历史和文件存储指向 [SCUT HPC 门户](https://hpckapok.scut.edu.cn)。文件链接中的用户名取自集群登录身份。允许浏览器通知后，页面保持打开时，作业完成或失败会收到一条系统通知。
+<img src="docs/screenshots/sandbox.png" alt="盒申请和自动资源预览" width="1100">
 
-## 相关链接
+## 项目结构
 
-- [科学计算平台门户](https://hpckapok.scut.edu.cn)
-- [用户手册](https://hpc.scut.edu.cn/docs/guide.html)
-- [SCUTHPC Skill](https://github.com/IRAgentLab/SCUTHPCSkill/)：登录、分区、作业提交与排障。本控制台不重复这些说明。
+```text
+SCUTHPC-Console/
+├── app.py、serve.py          # 兼容启动入口
+├── scuthpc_console/          # FastAPI、采集和盒服务实现
+├── static/                   # 浏览器控制台
+├── skills/
+│   ├── scut-hpc/             # SCUTHPC 集群使用 skill
+│   └── slurmbox/             # SlurmBox CLI、协议和文档
+├── sandbox/                  # 默认盒项目目录（仅保留占位文件）
+├── tests/                    # 本地测试
+└── docs/                     # 截图和本地运行说明
+```
 
-## 运行
+## 快速开始
 
-需要本机已能 SSH 登录两个集群。主机别名、密钥和账号的配法见 [SCUTHPC Skill](https://github.com/IRAgentLab/SCUTHPCSkill/)。
+### 1. 准备 SSH
+
+请先确认本机可以通过 SSH 登录两个集群，并准备好项目默认使用的主机别名：
+
+- `scut-hpc1`：集群 1（hpckapok1）
+- `scut-hpc`：集群 2（hpckapok2）
+
+集群连接、分区和作业规则见 [SCUTHPC skill](skills/scut-hpc/SKILL.md)。
+
+### 2. 安装依赖
 
 ```bash
-conda create -n hpc-monitor python=3.11 -y
-conda activate hpc-monitor
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pip install -e skills/slurmbox
+```
+
+Windows 用户可以使用 `.venv\Scripts\activate` 激活虚拟环境。
+
+### 3. 创建配置
+
+```bash
+cp config.example.json config.json
+```
+
+根据本机 SSH 别名和项目目录修改 `config.json`。这个文件已被 Git 忽略，不应提交集群账号、密钥或其他私密信息。
+
+### 4. 启动控制台
+
+```bash
+source .venv/bin/activate
 python serve.py
 ```
 
-本机打开 [http://127.0.0.1:8765](http://127.0.0.1:8765) 。Tailscale 在运行时，同一网络里的设备用 `tailscale ip -4` 的地址访问同一端口。
+然后打开 <http://127.0.0.1:8765>。本地启动、LaunchAgent 和故障排查说明见 [docs/LOCAL_SETUP.md](docs/LOCAL_SETUP.md)。
 
-默认使用 SSH Host `scut-hpc1`（hpckapok1）和 `scut-hpc`（hpckapok2）。别名不同，或门户地址有变化时，复制 `config.example.json` 为 `config.json` 再改。主登录节点连不上时，按 `ssh_fallbacks` 试备用别名。
+## 使用盒（SlurmBox）
 
-Windows cmd 进入其他盘符的目录时使用 `cd /d`。
+盒页面支持选择集群、GPU 卡数和申请时长，并根据集群配额自动计算 CPU 和内存。默认申请时长为 3 分钟，进入队列后可以尝试更新时限；也可以连续申请多条分配。
 
-## 采集范围
+安装 CLI 后，可以在配置的项目目录中使用：
 
-每次刷新对每个集群建立一次 SSH 会话，在登录节点读取节点、队列和近两日记账信息。正在运行的 GPU 作业会用 `srun --overlap` 采样一次 `nvidia-smi`。实验进度只来自标准输出末尾，程序若未打印步数，界面不会估计百分比。家目录用量对照 1 TB 免费额度，由登录节点上低优先级的后台统计得到，约每 30 分钟更新。`df` 看到的是整个 Lustre，不是个人配额。
+```bash
+slurmbox doctor --dry-run
+slurmbox start
+slurmbox exec -- python train.py
+```
+
+保活分配只负责维持资源，不执行用户代码。用户命令通过独立的 Slurm step 运行。完整的状态协议和操作说明见 [SlurmBox skill](skills/slurmbox/SKILL.md)、[用户指南](skills/slurmbox/USER_GUIDE_ZH.md) 和 [架构说明](skills/slurmbox/ARCHITECTURE.md)。
+
+## 开发与验证
+
+项目使用标准库优先的 Python 实现。修改后可运行：
+
+```bash
+PYTHONPATH=skills/slurmbox/src python -m slurmbox --help
+python -m py_compile app.py serve.py scuthpc_console/*.py skills/slurmbox/src/slurmbox/*.py
+git diff --check
+```
+
+本地开发不会自动提交或取消集群作业。需要进行真实集群操作时，请先阅读 [AGENTS.md](AGENTS.md)、[SCUTHPC skill](skills/scut-hpc/SKILL.md) 和 [SlurmBox skill](skills/slurmbox/SKILL.md)。
+
+## 隐私与数据范围
+
+控制台只在本地保存配置、采集缓存和盒状态；它不会把 SSH 密钥、token 或验证码写入仓库。作业和 GPU 信息来自用户账号能够读取的 Slurm 接口。服务默认只绑定本机地址，启用 Tailscale 时会额外绑定 Tailscale IPv4 地址。
+
+## 相关链接
+
+- [华南理工科学计算平台](https://hpckapok.scut.edu.cn)
+- [SCUT HPC 用户手册](https://hpc.scut.edu.cn/docs/guide.html)
+- [SCUTHPC skill](skills/scut-hpc/SKILL.md)
+- [SlurmBox skill](skills/slurmbox/SKILL.md)

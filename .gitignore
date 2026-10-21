@@ -1,6 +1,25 @@
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.coverage
+.coverage.*
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
 .venv/
 venv/
 config.json
 *.log
+.DS_Store
+
+# Unified SlurmBox local state
+sandbox/*
+!sandbox/.gitkeep
+.slurmbox/
+*.slurmbox.toml
+
+# Local tests are kept for development but excluded from the public snapshot.
+tests/
+skills/slurmbox/tests/

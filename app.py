@@ -1,24 +1,5 @@
-from pathlib import Path
+"""Compatibility entry point for ``uvicorn app:app``."""
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from scuthpc_console.app import app
 
-import collector
-
-app = FastAPI(title="SCUTHPC Console")
-ROOT = Path(__file__).resolve().parent
-
-
-@app.get("/api/snapshot")
-def snapshot():
-    return collector.snapshot()
-
-
-@app.get("/api/gpu")
-def gpu():
-    return collector.gpu_sample()
-
-
-@app.get("/")
-def index():
-    return FileResponse(ROOT / "static" / "index.html")
+__all__ = ["app"]

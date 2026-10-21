@@ -18,5 +18,10 @@
   "links": {
     "jobs": "https://hpckapok.scut.edu.cn/mis/user/historyJobs",
     "files": "https://hpckapok.scut.edu.cn/files/cluster_login2/public/home/{user}"
+  },
+  "slurmbox": {
+    "projects": [
+      {"name": "SlurmBox", "root": "./sandbox", "remote_workdir": "~/SlurmBox"}
+    ]
   }
 }

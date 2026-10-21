@@ -1,0 +1,14 @@
+[cluster]
+# Use "" when Slurm commands run on the current machine.
+ssh_alias = "scut-hpc"
+# This directory must already exist or be visible on the login/compute nodes.
+remote_workdir = "~/SlurmBox"
+
+[allocation]
+job_name = "SlurmBox"
+partition = "gpuA800"
+gres = "gpu:1"
+cpus_per_task = 8
+time = "08:00:00"
+mem = ""
+

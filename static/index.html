@@ -44,6 +44,15 @@
     font: inherit;
   }
   button.primary, .navbtn.active { background: #1d6fbf; color: #fff; border-color: #1d6fbf; }
+  button.danger { color: var(--bad); border-color: #f3c3cb; background: #fff; padding: 4px 10px; margin-left: 8px; }
+  button.danger:disabled { opacity: 0.6; cursor: wait; }
+  details.history { padding: 0; }
+  details.history > summary, details.history details > summary { cursor: pointer; list-style: none; }
+  details.history > summary::-webkit-details-marker, details.history details > summary::-webkit-details-marker { display: none; }
+  details.history > summary { padding: 16px; font-weight: 650; }
+  details.history .history-body { padding: 0 16px 8px; }
+  details.history details { border-top: 1px solid var(--line); padding: 10px 0 4px; }
+  details.history details > summary { padding: 4px 0 10px; font-weight: 600; }
   .view { display: none; }
   .view.active { display: block; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
@@ -64,6 +73,7 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; color: var(--muted); font-weight: 600; padding: 8px 6px; }
   td { padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
+  td.cmd { white-space: normal; min-width: 220px; }
   .table-scroll { overflow-x: auto; }
   .tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); background: #fff; }
   .tag.gpu { color: #5b3cc4; border-color: #ddd4fb; background: #f6f3ff; }
@@ -92,6 +102,15 @@
     white-space: pre-wrap;
   }
   .empty { color: var(--muted); padding: 12px 0; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .form-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
+  .form-grid select { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 8px; background: #fff; color: var(--text); font: inherit; }
+  .info-tip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 5px; border: 1px solid #9bb6d4; border-radius: 50%; color: #1d6fbf; font-size: 12px; font-weight: 700; cursor: help; vertical-align: -2px; }
+  .info-tip .tip { display: none; position: absolute; z-index: 30; left: 24px; bottom: -4px; width: 250px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left; }
+  .info-tip:hover .tip, .info-tip:focus .tip { display: block; }
+  .duration-edit { margin-top: 10px; display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+  .duration-edit select { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; background: #fff; color: var(--text); font: inherit; }
+  .duration-edit button { padding: 5px 9px; }
   .job .stuck { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 10px; background: #fff1f2; color: var(--bad); border: 1px solid #ffd0d6; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
   .chip { border: 1px solid var(--line); background: var(--soft); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
@@ -188,11 +207,13 @@
     <button class="navbtn active" data-view="overview" type="button">总览</button>
     <button class="navbtn" data-view="resources" type="button">集群资源</button>
     <button class="navbtn" data-view="jobs" type="button">在跑作业</button>
+    <button class="navbtn" data-view="sandbox" type="button">盒</button>
     <button class="navbtn" data-view="history" type="button">作业记录</button>
   </nav>
   <section class="view active" id="view-overview"></section>
   <section class="view" id="view-resources"></section>
   <section class="view" id="view-jobs"></section>
+  <section class="view" id="view-sandbox"></section>
   <section class="view" id="view-history"></section>
 </div>
 <div class="notice-wrap">
@@ -433,7 +454,7 @@ function jobCard(job, clusterLabel) {
   return `<article class="card job">
     ${stuck}
     <div>
-      <div class="name">${esc(job.name)}</div>
+      <div class="name">${esc(job.name)}${sandboxTag(job.id)}</div>
       <div class="id">${esc(job.id)} · ${esc(clusterLabel)}</div>
       <p><span class="tag ${stateClass(job.state)}">${esc(job.state)}</span>
          <span class="tag">${esc(job.partition)}</span>
@@ -689,7 +710,7 @@ function curvePanels(id, span) {
 function curveCard(job, clusterLabel) {
   return `<article class="card flat">
     <div class="job-head">
-      <div class="name">${esc(job.name)}</div>
+      <div class="name">${esc(job.name)}${sandboxTag(job.id)}</div>
       <div class="id">${esc(job.id)} · ${esc(clusterLabel)} · ${esc(job.nodelist || "")}</div>
     </div>
     ${curvePanels(job.id, "live")}
@@ -704,6 +725,7 @@ async function pollGpu() {
     if (!res.ok) return;
     rememberGpu(await res.json());
     if (view === "jobs" && jobMode === "curves") mountCharts();
+    if (view === "sandbox" && snapshot) render();
     if (view === "history" && expandedCurves.size) mountCharts();
   } catch (e) {
   } finally {
@@ -760,8 +782,10 @@ function watchJobs(data) {
 }
 
 let snapshot = null;
+let sandboxData = null;
+let sandboxOptions = null;
 let view = location.hash.replace("#", "") || "overview";
-if (!["overview", "resources", "jobs", "history"].includes(view)) view = "overview";
+if (!["overview", "resources", "jobs", "sandbox", "history"].includes(view)) view = "overview";
 
 function show(name) {
   view = name;
@@ -793,13 +817,30 @@ function render() {
         const exp = parseExperiment(job.log);
         const idle = lowStreak[job.id] || 0;
         const prog = exp ? esc(exp.text) + (exp.eta ? " · " + esc(exp.eta) : "") : "日志未提供";
-        return `<tr class="rowlink" data-go="jobs"><td>${esc(job.name)}<div class="id">${esc(job.id)}</div></td><td>${esc(label)}</td><td>${esc(job.nodelist || "—")}</td><td>${esc(job.elapsed)}</td><td>${idle >= 3 ? `<span class="bad">可能卡住</span> ` : ""}${prog}</td></tr>`;
+        return `<tr class="rowlink" data-go="jobs"><td>${esc(job.name)}${sandboxTag(job.id)}<div class="id">${esc(job.id)}</div></td><td>${esc(label)}</td><td>${esc(job.nodelist || "—")}</td><td>${esc(job.elapsed)}</td><td>${idle >= 3 ? `<span class="bad">可能卡住</span> ` : ""}${prog}</td></tr>`;
       }).join("") + `</tbody></table></div>` : `<div class="empty">当前没有在跑作业</div>`) +
     `</article>`;
   $("view-resources").innerHTML = resourcePage(clusters);
   const jobBody = jobs.length ? jobs.map(({ job, label }) => jobMode === "curves" && (/gpu/i.test(job.gres || "") || /gpu/i.test(job.partition || "") || gpuSeries(job.id).length) ? curveCard(job, label) : jobCard(job, label)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
   $("view-jobs").innerHTML = `<div class="actions" style="margin-bottom:12px"><button type="button" data-mode="cards" class="${jobMode === "curves" ? "" : "primary"}">卡片</button><button type="button" data-mode="curves" class="${jobMode === "curves" ? "primary" : ""}">曲线</button><span class="hint">曲线每 5 秒采样，最近 6 小时留在本机</span></div>${jobBody}`;
   document.querySelectorAll("[data-mode]").forEach((btn) => btn.onclick = () => { jobMode = btn.dataset.mode; localStorage.setItem("scuthpc-job-mode", jobMode); render(); });
+  const previousSandboxForm = document.querySelector("[data-sandbox-request]");
+  const previousSandboxValues = previousSandboxForm ? Object.fromEntries(new FormData(previousSandboxForm)) : null;
+  $("view-sandbox").innerHTML = sandboxPage();
+  const currentSandboxForm = document.querySelector("[data-sandbox-request]");
+  if (currentSandboxForm && previousSandboxValues) {
+    for (const [name, value] of Object.entries(previousSandboxValues)) {
+      if (currentSandboxForm.elements[name]) currentSandboxForm.elements[name].value = value;
+    }
+  }
+  document.querySelectorAll("[data-cancel-step]").forEach((btn) => { btn.onclick = () => cancelSandboxStep(btn); });
+  const requestForm = document.querySelector("[data-sandbox-request]");
+  if (requestForm) requestForm.onsubmit = requestSandbox;
+  document.querySelectorAll("[data-update-duration-form]").forEach((form) => { form.onsubmit = updateSandboxDuration; });
+  document.querySelectorAll("[data-sandbox-gpus], [data-sandbox-cluster]").forEach((el) => el.onchange = () => { updateSandboxGpuChoices(); updateSandboxPreview(); });
+  updateSandboxGpuChoices();
+  updateSandboxPreview();
+  document.querySelectorAll("[data-history-key]").forEach((el) => el.addEventListener("toggle", () => { if (el.open) touchSandboxHistory(el.dataset.historyKey); }));
   $("view-history").innerHTML = `<article class="card"><h2>近两日作业</h2>${historyTable(recent.slice(-24))}<p class="hint">作业号跳转到门户历史页，门户里可以看完整日志。</p></article>`;
   document.querySelectorAll("[data-go]").forEach((el) => el.onclick = () => show(el.dataset.go));
   document.querySelectorAll("[data-curve]").forEach((btn) => btn.onclick = () => {
@@ -814,11 +855,324 @@ function render() {
 document.querySelectorAll(".navbtn").forEach((b) => b.onclick = () => show(b.dataset.view));
 show(view);
 
+function sandboxTag(id) {
+  const boxes = (sandboxData && sandboxData.sandboxes) || [];
+  return boxes.some((box) => String(box.job_id) === String(id)) ? ` <span class="tag own">盒</span>` : "";
+}
+function findSnapshotJob(id) {
+  let found = null;
+  ((snapshot && snapshot.clusters) || []).forEach((cluster) => (cluster.jobs || []).forEach((job) => {
+    if (String(job.id) === String(id)) found = job;
+  }));
+  return found;
+}
+function gpuPanel(gpus, running, error) {
+  if (gpus && gpus.length) {
+    return `<div class="gpus">${gpus.map((gpu) => {
+      const memPct = gpu.mem_total ? gpu.mem_used / gpu.mem_total * 100 : 0;
+      const temp = gpu.temp == null ? "" : `${Math.round(gpu.temp)}°C · ${Math.round(gpu.power || 0)}W`;
+      return `<div class="gpu">
+        <div class="top"><span>GPU ${gpu.index}</span><span>${temp}</span></div>
+        <strong class="${gpu.util < 5 ? "warn" : "ok"}">${Math.round(gpu.util)}%</strong>
+        ${bar(gpu.util, gpu.util < 5 ? "warn" : "ok")}
+        <div class="top"><span>显存 ${(gpu.mem_used / 1024).toFixed(1)} / ${(gpu.mem_total / 1024).toFixed(0)} GB</span></div>
+        ${bar(memPct)}
+      </div>`;
+    }).join("")}</div>`;
+  }
+  if (running) return `<div class="empty">${esc(error || "无 GPU 采样")}</div>`;
+  return `<div class="empty">任务已结束，没有实时显卡</div>`;
+}
+function sandboxGpus(box) {
+  if (box.gpus && box.gpus.length) return box.gpus;
+  const job = findSnapshotJob(box.job_id);
+  return (job && job.gpus) || [];
+}
+function sandboxRemain(box) {
+  const live = box.live || {};
+  const job = findSnapshotJob(box.job_id);
+  const limit = live.limit_sec != null ? live.limit_sec : (job && job.limit_sec);
+  const elapsed = live.elapsed_sec != null ? live.elapsed_sec : (job && job.elapsed_sec);
+  if (limit == null || elapsed == null) return null;
+  return Math.max(0, limit - elapsed);
+}
+function sandboxAllocCard(box) {
+  const alloc = box.allocation || {};
+  const live = box.live || {};
+  const job = findSnapshotJob(box.job_id);
+  const state = live.state || (job && job.state) || (box.local_status === "missing" ? "未启动" : box.local_status || "未知");
+  const running = !box.history && /RUN/i.test(state);
+  const elapsed = live.elapsed || (job && job.elapsed) || "—";
+  const limit = live.limit || (job && job.limit) || alloc.time || "—";
+  const elapsedSec = live.elapsed_sec != null ? live.elapsed_sec : ((job && job.elapsed_sec) || 0);
+  const limitSec = live.limit_sec != null ? live.limit_sec : ((job && job.limit_sec) || 0);
+  const remain = sandboxRemain(box);
+  const logLines = (box.log && box.log.length) ? box.log : ((job && job.log) || []);
+  const log = logLines.length ? `<div class="log">${logLines.map(esc).join("\n")}</div>` : `<p class="hint">没有读到保活日志</p>`;
+  const meta = [alloc.partition || (job && job.partition), alloc.gres || (job && job.gres), alloc.cpus_per_task ? alloc.cpus_per_task + " 核" : "", live.nodelist || (job && job.nodelist) || ""].filter(Boolean).join(" · ");
+  return `<article class="card job">
+    <div>
+      <div class="name">${esc(box.name)}</div>
+      <div class="id">${box.job_id ? esc(box.job_id) : "未启动"} · ${esc(box.cluster_label || box.ssh_alias || "未关联集群")}</div>
+      <p><span class="tag ${stateClass(state)}">${esc(state)}</span>
+         <span class="tag">${esc(alloc.partition || "盒")}</span></p>
+      <div class="hint">已运行 ${esc(elapsed)} / ${esc(limit)}${remain == null ? "" : " · 剩余 " + formatDuration(remain)}</div>
+      ${bar(limitSec ? Math.min(100, elapsedSec / limitSec * 100) : 0)}
+      <p class="hint">${esc(meta || "未记录资源")}</p>
+      ${box.error && !box.history ? `<p class="bad">${esc(box.error)}</p>` : ""}
+      ${!box.history && box.job_id ? durationEditor(box) : ""}
+    </div>
+    <div>${gpuPanel(sandboxGpus(box), running, box.gpu_error || (job && job.metrics_error))}<p class="hint">保活日志</p>${log}</div>
+  </article>`;
+}
+function isProgressLine(line) {
+  return /%\||it\/s|s\/it|\d+\s*\/\s*\d+/.test(line || "");
+}
+function sandboxStepTitle(step) {
+  const name = String(step.name || "").trim();
+  if (name && !/^(bash|sh|python|python3|sleep)$/i.test(name)) return name;
+  const script = String(step.command || "").match(/([\w.-]+\.(?:py|sh))/);
+  if (script) return script[1];
+  const line = (step.log || []).map((item) => String(item).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim()).find((text) => text && !text.startsWith("{") && text.length < 80 && !isProgressLine(text));
+  return line || name || "任务";
+}
+function sandboxStepCard(step, box) {
+  const running = !box.history && /RUN/i.test(step.state || "");
+  const remain = running ? sandboxRemain(box) : null;
+  const exp = parseExperiment(step.log || []);
+  const expHtml = exp
+    ? `<div class="hint">实验进度${exp.label ? " · " + esc(exp.label) : ""} ${esc(exp.text)}${exp.eta ? " · " + esc(exp.eta) : ""}</div>${bar(exp.pct, "ok")}`
+    : "";
+  const timeHint = running
+    ? `已运行 ${esc(step.elapsed || "—")}${remain == null ? "" : " · 分配剩余 " + formatDuration(remain)}`
+    : `用时 ${esc(step.elapsed || "—")} · 退出 ${esc(step.exit || "—")}${step.end ? " · 结束 " + esc(step.end) : ""}`;
+  const log = (step.log || []).length
+    ? `<div class="log">${step.log.map(esc).join("\n")}</div>`
+    : `<p class="hint">${running ? "还没有读到这步的日志" : "这步没有留下日志。之后的 slurmbox exec 会写入 steps/作业号.步号.log"}</p>`;
+  const cancellable = running && new RegExp("^" + String(box.job_id) + "\\.\\d+$").test(String(step.id || ""));
+  const cancelBtn = cancellable
+    ? `<button type="button" class="danger" data-cancel-job="${esc(box.job_id)}" data-cancel-step="${esc(step.id)}" data-cancel-name="${esc(sandboxStepTitle(step)).replace(/"/g, "&quot;")}">结束任务</button>`
+    : "";
+  return `<article class="card job">
+    <div>
+      <div class="name">${esc(sandboxStepTitle(step))}</div>
+      <div class="id">${esc(step.id)} · ${esc(step.nodelist || "—")}</div>
+      <p><span class="tag ${stateClass(step.state)}">${esc(step.state || "—")}</span>${cancelBtn}</p>
+      <div class="hint">${timeHint}</div>
+      ${running && box.live && box.live.limit_sec ? bar(Math.min(100, ((box.live.elapsed_sec || 0) / box.live.limit_sec) * 100)) : ""}
+      ${expHtml}
+    </div>
+    <div>${gpuPanel(running ? sandboxGpus(box) : [], running, box.gpu_error)}${log}</div>
+  </article>`;
+}
+function isProbeStep(step) {
+  const name = step.name || "";
+  const command = step.command || "";
+  if (name === "nvidia-smi" || name === "scuthpc-probe" || /nvidia-smi/.test(command)) return true;
+  return name === "bash" && step.elapsed_sec != null && step.elapsed_sec <= 2 && !(step.log || []).length;
+}
+const SANDBOX_HISTORY_KEY = "scuthpc-sandbox-history-v1";
+const SANDBOX_HISTORY_LIMIT = 10;
+function loadSandboxHistory() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SANDBOX_HISTORY_KEY) || "[]");
+    return Array.isArray(raw) ? raw.filter((item) => item && item.key && item.box) : [];
+  } catch (e) {
+    return [];
+  }
+}
+function saveSandboxHistory(items) {
+  const ranked = items.slice().sort((a, b) => (b.used || 0) - (a.used || 0)).slice(0, SANDBOX_HISTORY_LIMIT);
+  try { localStorage.setItem(SANDBOX_HISTORY_KEY, JSON.stringify(ranked)); } catch (e) {}
+  return ranked;
+}
+function sandboxIsOpen(box) {
+  if (!box || !box.job_id) return false;
+  if (String(box.local_status || "").toLowerCase() === "stopped") return false;
+  const state = String((box.live && box.live.state) || "");
+  if (!state) return String(box.local_status || "").toLowerCase() === "running";
+  return /^(RUNNING|PENDING|CONFIGURING)\b/i.test(state);
+}
+function archiveSandbox(box) {
+  const tasks = (box.steps || []).filter((step) => step.kind === "task" && !isProbeStep(step));
+  const key = (box.name || "SlurmBox") + ":" + box.job_id;
+  const items = loadSandboxHistory();
+  const prev = items.find((item) => item.key === key);
+  const fresh = {
+    name: box.name,
+    job_id: box.job_id,
+    cluster_label: box.cluster_label,
+    ssh_alias: box.ssh_alias,
+    local_status: box.local_status,
+    allocation: box.allocation || {},
+    live: box.live,
+    log: (box.log || []).slice(-12),
+    history: true,
+    steps: tasks.map((step) => Object.assign({}, step, { log: (step.log || []).slice(-12) })),
+  };
+  const keepPrevious = prev && prev.box && (prev.box.steps || []).length && !tasks.length;
+  const record = {
+    key,
+    name: box.name || "SlurmBox",
+    job_id: String(box.job_id),
+    cluster: box.cluster_label || box.ssh_alias || "",
+    state: keepPrevious ? prev.state : ((box.live && box.live.state) || box.local_status || "stopped"),
+    elapsed: keepPrevious ? prev.elapsed : ((box.live && box.live.elapsed) || ""),
+    closed_at: (prev && prev.closed_at) || Date.now(),
+    used: (prev && prev.used) || Date.now(),
+    tasks: keepPrevious ? prev.tasks : tasks.length,
+    box: keepPrevious ? prev.box : fresh,
+  };
+  saveSandboxHistory(items.filter((item) => item.key !== key).concat(record));
+}
+function touchSandboxHistory(key) {
+  const items = loadSandboxHistory();
+  const found = items.find((item) => item.key === key);
+  if (!found) return;
+  found.used = Date.now();
+  saveSandboxHistory(items);
+}
+function sandboxCard(box) {
+  const tasks = (box.steps || []).filter((step) => step.kind === "task" && !isProbeStep(step));
+  const hidden = (box.steps || []).filter((step) => step.kind === "task" && isProbeStep(step)).length;
+  const taskBody = tasks.length
+    ? tasks.map((step) => sandboxStepCard(step, box)).join("")
+    : `<article class="card"><div class="empty">${box.job_id ? "这条分配里还没有用户任务。slurmbox exec 或 shell 启动后会出现在这里。" : "这个目录还没有盒记录。在项目里执行 slurmbox start 后，这里会显示分配和其中的任务。"}</div></article>`;
+  const note = hidden ? `<p class="hint">已隐藏 ${hidden} 个控制台自己的显卡采样步</p>` : "";
+  return `${sandboxAllocCard(box)}<h2 style="margin:4px 0 10px">盒任务 <span class="tag">${tasks.length}</span></h2>${note}${taskBody}`;
+}
+function durationLabel(minutes) {
+  return minutes < 60 ? `${minutes} 分钟` : (minutes % 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes / 60} 小时`);
+}
+function durationMinutesFromSlurm(text) {
+  const raw = String(text || "");
+  const parts = raw.split("-");
+  const clock = parts.length > 1 ? parts[1] : parts[0];
+  const nums = clock.split(":").map(Number);
+  if (nums.length !== 3 || nums.some((n) => !Number.isFinite(n))) return 3;
+  return (Number(parts.length > 1 ? parts[0] : 0) * 24 * 60) + nums[0] * 60 + nums[1];
+}
+function durationChoices(selected) {
+  const values = [3, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320];
+  return values.map((m) => `<option value="${m}" ${m === selected ? "selected" : ""}>${durationLabel(m)}</option>`).join("");
+}
+function durationEditor(box) {
+  const selected = durationMinutesFromSlurm((box.allocation || {}).time);
+  return `<form class="duration-edit" data-update-duration-form><input type="hidden" name="job_id" value="${esc(box.job_id)}"><input type="hidden" name="project" value="${esc(box.root || "")}"><span class="hint">调整时限</span><select name="duration_minutes">${durationChoices(selected)}</select><button type="submit">更新</button><span class="hint" data-duration-message>排队或运行中均可尝试修改</span></form>`;
+}
+function sandboxRequestCard() {
+  const opts = sandboxOptions || {};
+  const clusters = opts.clusters || [];
+  const projects = opts.projects || [];
+  if (!clusters.length || !projects.length) return `<article class="card"><h2>申请盒</h2><div class="empty">请先在 config.json 配置集群和 slurmbox.projects。</div></article>`;
+  const clusterOptions = clusters.map((c, i) => `<option value="${esc(c.id)}" ${i === 0 ? "selected" : ""}>${esc(c.label)}</option>`).join("");
+  const projectOptions = projects.map((p, i) => `<option value="${esc(p.root)}" ${i === 0 ? "selected" : ""}>${esc(p.name || p.root)}</option>`).join("");
+  const durationOptions = (opts.duration_minutes || [3, 5, 10, 15, 30, 60, 120, 240, 480, 720, 1440, 2880, 4320]).map((m) => `<option value="${m}" ${m === 3 ? "selected" : ""}>${durationLabel(m)}</option>`).join("");
+  return `<article class="card"><h2>申请盒 <span class="hint">可连续申请多条分配，任务通过 SlurmBox step 执行</span><span class="info-tip" tabindex="0" aria-label="申请盒功能说明">i<span class="tip">申请一条持久 Slurm 资源分配；先申请资源，再独立提交运行命令，子任务结束不会自动释放资源。</span></span></h2>
+    <form data-sandbox-request><div class="form-grid">
+      <label>集群<select data-sandbox-cluster name="cluster_id">${clusterOptions}</select></label>
+      <label>项目<select name="project">${projectOptions}</select></label>
+      <label>GPU 卡数<select data-sandbox-gpus name="gpus">${[1,2,3,4,5,6,7,8].filter((n) => n <= (clusters[0].max_gpus || 8)).map((n) => `<option value="${n}" ${n === 1 ? "selected" : ""}>${n} 张</option>`).join("")}</select></label>
+      <label>时长<select name="duration_minutes">${durationOptions}</select></label>
+      <label>自动资源<span class="chip" data-sandbox-preview>正在计算…</span></label>
+      <button class="primary" type="submit">申请盒</button>
+    </div><p class="hint" data-sandbox-message>CPU 按集群每卡配额自动计算，内存按每卡 24 GiB 计算。</p></form></article>`;
+}
+function selectedSandboxCluster() {
+  const id = document.querySelector("[data-sandbox-cluster]")?.value;
+  return (sandboxOptions?.clusters || []).find((c) => String(c.id) === String(id));
+}
+function updateSandboxPreview() {
+  const cluster = selectedSandboxCluster();
+  const gpus = Number(document.querySelector("[data-sandbox-gpus]")?.value || 1);
+  const target = document.querySelector("[data-sandbox-preview]");
+  if (target && cluster) target.textContent = `${cluster.cores_per_gpu * gpus} 核 · ${cluster.mem_gib_per_gpu * gpus}G`;
+}
+function updateSandboxGpuChoices() {
+  const select = document.querySelector("[data-sandbox-gpus]");
+  const cluster = selectedSandboxCluster();
+  if (!select || !cluster) return;
+  const current = Math.min(Number(select.value || 1), cluster.max_gpus || 8);
+  select.innerHTML = Array.from({ length: cluster.max_gpus || 8 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n === current ? "selected" : ""}>${n} 张</option>`).join("");
+  updateSandboxPreview();
+}
+async function requestSandbox(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = form.querySelector("[data-sandbox-message]");
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  message.textContent = "正在提交 sbatch…";
+  try {
+    const res = await fetch("/api/sandbox/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "申请失败");
+    message.textContent = `已提交盒作业 ${data.job_id}，正在刷新状态。`;
+    const refreshed = await fetch("/api/sandbox");
+    if (refreshed.ok) sandboxData = await refreshed.json();
+    render();
+  } catch (err) {
+    message.textContent = String(err);
+  } finally { button.disabled = false; }
+}
+async function updateSandboxDuration(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const message = form.querySelector("[data-duration-message]");
+  const button = form.querySelector("button[type=submit]");
+  button.disabled = true;
+  message.textContent = "正在更新时限…";
+  try {
+    const res = await fetch("/api/sandbox/update-duration", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "更新失败");
+    message.textContent = `已更新为 ${data.time}`;
+    const refreshed = await fetch("/api/sandbox");
+    if (refreshed.ok) sandboxData = await refreshed.json();
+    render();
+  } catch (err) { message.textContent = String(err); }
+  finally { button.disabled = false; }
+}
+function sandboxHistoryHtml() {
+  const items = loadSandboxHistory().slice().sort((a, b) => (b.used || 0) - (a.used || 0));
+  if (!items.length) return "";
+  const rows = items.map((item) => {
+    const when = item.closed_at ? new Date(item.closed_at).toLocaleString("zh-CN", { hour12: false }) : "";
+    return `<details data-history-key="${esc(item.key)}">
+      <summary>${esc(item.name)} · ${esc(item.job_id)} · ${esc(item.state || "已关闭")}${item.elapsed ? " · 用时 " + esc(item.elapsed) : ""}${when ? " · 关闭于 " + esc(when) : ""}</summary>
+      ${sandboxCard(item.box)}
+    </details>`;
+  }).join("");
+  return `<details class="card history"><summary>盒历史 <span class="tag">${items.length}</span> <span class="hint">默认收起，保存在本机浏览器，最多 10 条</span></summary><div class="history-body">${rows}</div></details>`;
+}
+function sandboxPage() {
+  if (!sandboxData) return `<article class="card"><div class="empty">正在读取盒…</div></article>`;
+  if (sandboxData.error && !(sandboxData.sandboxes || []).length) return sandboxRequestCard() + `<article class="card"><div class="empty">${esc(sandboxData.error)}</div></article>`;
+  const boxes = sandboxData.sandboxes || [];
+  if (!boxes.length) return sandboxRequestCard();
+  boxes.forEach((box) => { if (box.job_id && !sandboxIsOpen(box)) archiveSandbox(box); });
+  const open = boxes.filter(sandboxIsOpen);
+  const when = sandboxData.fetched_at ? `<p class="hint">盒状态更新于 ${ago(sandboxData.fetched_at)}。结束任务只取消这一步，盒分配会继续保留。</p>` : "";
+  const live = open.length ? open.map(sandboxCard).join("") : `<article class="card"><div class="empty">当前没有打开的盒。</div></article>`;
+  return sandboxRequestCard() + when + live + sandboxHistoryHtml();
+}
+
 let loading = false;
 async function load() {
   if (loading) return;
   loading = true;
   $("refresh").textContent = "刷新中…";
+  const boxPromise = fetch("/api/sandbox").then(async (res) => {
+    if (!res.ok) throw new Error("盒接口 " + res.status);
+    sandboxData = await res.json();
+    if (snapshot) render();
+    else $("view-sandbox").innerHTML = sandboxPage();
+  }).catch((err) => {
+    sandboxData = { error: String(err), sandboxes: [] };
+    if (snapshot) render();
+    else $("view-sandbox").innerHTML = sandboxPage();
+  });
+  fetch("/api/sandbox/options").then((res) => res.json()).then((data) => { sandboxOptions = data; if (snapshot) render(); }).catch(() => {});
   try {
     const res = await fetch("/api/snapshot");
     snapshot = await res.json();
@@ -834,6 +1188,7 @@ async function load() {
   } finally {
     loading = false;
     $("refresh").textContent = "立即刷新";
+    await boxPromise;
   }
 }
 $("notifyBtn").textContent = notifyLabel();
@@ -843,6 +1198,29 @@ $("notifyBtn").onclick = async () => {
   $("notifyBtn").textContent = notifyLabel();
 };
 $("refresh").onclick = load;
+async function cancelSandboxStep(btn) {
+  const step = btn.dataset.cancelStep;
+  const job = btn.dataset.cancelJob;
+  const name = btn.dataset.cancelName || step;
+  if (!window.confirm("结束任务 " + name + "（" + step + "）？只取消这一步，盒分配继续保留。")) return;
+  btn.disabled = true;
+  btn.textContent = "正在结束…";
+  try {
+    const res = await fetch("/api/sandbox/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: job, step_id: step }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || "结束失败");
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "结束任务";
+    window.alert(String(err.message || err));
+    return;
+  }
+  load();
+}
 load();
 setInterval(load, 20000);
 setInterval(pollGpu, 5000);
