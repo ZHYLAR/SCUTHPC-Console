@@ -7,7 +7,7 @@
 #SBATCH -N 1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1              # 只申请需要的卡：推理/评测 1 卡，微调 2–4 卡
-#SBATCH --cpus-per-task=12        # 1 卡 12 核、2 卡 24 核，按卡数线性
+#SBATCH --cpus-per-task=8         # 集群 2 单卡上限 8 核；集群 1 A800 单卡按需最多 9 核
 #SBATCH --mem=96G
 #SBATCH --time=24:00:00
 #SBATCH --propagate=NONE          # 不把登录节点 ulimit -u 1000 带进作业，否则多线程程序 pthread_create 失败

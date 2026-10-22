@@ -1,11 +1,11 @@
 ---
 name: scut-hpc
-description: 在华南理工科学计算平台（hpckapok2 集群，Slurm）上提交、排查、清理作业。当用户要在 HPC/Slurm 集群上跑训练/推理/评测/转码、写 sbatch 脚本、串依赖链、看作业为什么挂了或退出码异常、查配额与清理存储、配置容器/代理/HF 镜像时使用。
+description: 在华南理工 hpckapok1/hpckapok2 集群（Slurm）提交、监控、排查训练、评测和 CPU 作业，核对 GPU/CPU 资源配比，并处理集群存储、容器与环境问题。
 ---
 
 # 华南理工 HPC（Slurm）作业 skill
 
-面向 hpckapok2 集群（登录节点 202.38.252.210/211）。官方文档：https://hpc.scut.edu.cn/docs/guide.html 。
+面向 hpckapok1 与 hpckapok2 集群。官方文档：https://hpc.scut.edu.cn/docs/guide.html 。
 下面每条规则都带"为什么"，模板在 `templates/`：`gpu_job.sbatch`（GPU 作业骨架）、`cpu_run.sbatch`（任意命令的 CPU 包装器）。
 
 ## 一、何时用
@@ -64,8 +64,8 @@ hpc_ssh() {                       # 用法：hpc_ssh 'squeue -u $USER'
 #SBATCH -J <name>              # 作业名，日志用 %x
 #SBATCH -p gpuA800             # 或 cpuXeon6458 / cpuHygon7380
 #SBATCH --gres=gpu:1           # 只申请需要的卡数
-#SBATCH --cpus-per-task=12     # 1 卡 12 核、2 卡 24 核
-#SBATCH --time=24:00:00        # 占位。剩余卡少时改成同类任务的实际耗时，见 §4.1.2
+#SBATCH --cpus-per-task=8      # 集群 2 单卡；集群 1 A800 单卡最多按 9 核预算
+#SBATCH --time=24:00:00
 #SBATCH --propagate=NONE       # 见 §4.2
 #SBATCH -o %x_%j.out
 #SBATCH -e %x_%j.out
@@ -81,7 +81,7 @@ awk '/^#SBATCH/{last=NR} !/^#/ && !/^$/ && !/^#!/ && !first{first=NR} END{print 
 - 日志用 `%x_%j.out`，脚本末尾 `exit $RC`。**为什么**：Slurm 以脚本最后一条命令的退出码为准；崩溃后若最后一条是 `echo`，状态就是 COMPLETED，`afterok` 拦不住失败。评测/训练 python 脚本本身也要 `sys.exit(rc)`。
 - 提交并拿作业号：`JID=$(sbatch --parsable job.sbatch)`。
 - 查看：`squeue -u $USER -o '%i %j %T %M %R'`、`sacct -j $JID --format=JobID,State,ExitCode,Elapsed,MaxRSS`、`scontrol show job $JID`。集群配了 `PrivateData=jobs`，`squeue` 看不到别人的作业，排队原因要看 `sinfo`（§4.1）。
-- 交互式调试：`srun -p gpuA800 --gres=gpu:1 --cpus-per-task=12 --time=2:00:00 --pty bash`；进别的作业看进程：`srun --jobid=$JID --overlap bash -c 'ps -u $USER -o nlwp,comm --sort=-nlwp | head'`。
+- 交互式调试：集群 2 可用 `srun -p gpuA800 --gres=gpu:1 --cpus-per-task=8 --time=2:00:00 --pty bash`；进自己的作业看进程：`srun --jobid=$JID --overlap bash -c 'ps -u $USER -o nlwp,comm --sort=-nlwp | head'`。
 
 ### 3.2 通用 CPU 包装器（`templates/cpu_run.sbatch`）
 
@@ -116,43 +116,18 @@ sbatch -J train --dependency=singleton train.sbatch   # 同名作业串行，天
 ### 4.1 分区选择与节点状态
 
 ```bash
-sinfo -p gpuA800 -N -o '%N %t %G %C'           # 每节点状态：idle/mix/alloc/drain；%G 是总卡数不是空卡
-sinfo -p gpuA800 -N --states=idle,mix           # 候选节点，还要再扣 CPU
+sinfo -p gpuA800 -N -o '%N %t %G %C'           # 每节点状态：idle/mix/alloc/drain
+sinfo -p gpuA800 -N --states=idle,mix           # 能立刻拿到卡的节点
 sinfo -p cpuXeon6458 -o '%P %a %D %t'
 ```
 
-### 4.1.1 不排队就能用的卡（提交前必查）
-
-**为什么**：`sinfo` 的空闲 GPU 是各节点「还没分出去的卡」相加。平台要求按卡配核（集群 1 的 `gpuA800` 为 **1 卡 9 核**，集群 2 的 `gpuA800` / `gpuMi210` / `gpuHygonZ100` 为 **1 卡 8 核**）。混部节点经常是卡还在、核已经没了，这种卡会进排队。一个作业又是单节点的，不能把多台机器的空卡拼成一次申请。
-
-单节点可立即提交的卡数 = `min(空闲 GPU, floor(空闲 CPU / 每卡核数))`。只统计 `idle`/`mix`，排除 `drain`/`down`。名称以 `emic`、`gznet`、`ex`、`telecom` 开头的分区是专属资源，不计入公共可立即使用的数量。
-
-计算脚本是同目录的 `scripts/free_gpus.py`，在本机跑，不要把脚本内容贴进对话。`scontrol` 仍在集群上执行：
-
-```bash
-ssh scut-hpc  'scontrol -o show node' | python3 "<SKILL.md 同级>/scripts/free_gpus.py" --cores 8
-ssh scut-hpc1 'scontrol -o show node' | python3 "<SKILL.md 同级>/scripts/free_gpus.py" --cores 9
-```
-
-集群 2，以及 MI210 / Z100，用 `--cores 8`。集群 1 的 `gpuA800` 用 `--cores 9`。实际申请不是这个配核时，把 `--cores` 改成真实的每卡核数再算一遍。
-
-**优先用不排队资源**：卡数选上面打印出的某一档（有「可交 N 卡」的节点），不要为了凑满 8 卡去排 `PD`。评测/推理优先 1 卡；微调在不排队的前提下取 2–4 卡。每卡核数默认用平台配核（集群 1 A800 为 9，其余为 8），这样才对得上「可交 N 卡」。只有该档确实空闲、而且程序吃 CPU 时，才升到 1 卡 12 核并把 `CORES=12` 重算一遍；12 核对不上任何节点就退回 8/9 核，不要为此排队。`--mem` 按需，不要整节点。**为什么**：空卡合计看起来还有，核一不够就只能排队；先用当前单机能装下的规格，作业才能马上跑。
-
-- `gpuA800`：标称节点里常有不少 `drain`；排队前先跑上面的命令，别按标称卡数盲等。
-- `cpuXeon6458`：默认 CPU 分区。`cpuHygon7380` 不支持某些 x86 扩展指令（`SIGILL` / `rc=132` 就换 Xeon）。
+- `gpuA800`：标称 20 节点，**实际常只有少数节点可用，其余 drain**；排队时先看 `sinfo`，别盲等。
+- `cpuXeon6458`：195 节点，默认 CPU 分区。
+- `cpuHygon7380`：AMD 兼容架构，**某些 x86 扩展指令不支持**（出现 SIGILL / `rc=132` 就换 Xeon）。
+- 集群 1 的 `gpuA800` 按每卡 **9 核**、集群 2 的 `gpuA800` / `gpuMi210` / `gpuHygonZ100` 按每卡 **8 核**作为节点布局预算上限，实际资源提交前用 `scontrol show node` 核对。GPU 作业按程序所需申请 CPU，默认不超过 `GPU 数 × 对应核数`；集群 2 的 1/2/4 卡对应上限为 8/16/32 核。轻量评测若实测 4 核足够，就申请 4 核，不必凑满预算。提交前核对 `--gres`、`--ntasks`、`--cpus-per-task` 和同一节点的空闲资源；多申请 CPU 会挤占同节点剩余 GPU 的调度空间。确需超过每卡预算时，先确认目标节点余量并记录理由，不把超额申请作为模板默认值。
+- 评测/推理通常申请 1 卡，微调按实际吞吐和排队情况选择卡数；内存按需申请，不占整节点。纯 CPU 预处理、统计、校验和转码使用 CPU 分区，**不要申请 GPU 或占用 GPU 分区**。
+- `--time` 参考同类作业的实际耗时并留启动余量，不依赖运行后再延长：集群 2 普通用户增加运行中作业时限曾返回 `Access/permission denied`。排队中作业可尝试修改时限，但须核对命令返回值和 `scontrol show job`。长评测可按互不重复的 seed 段运行，失败后只补该段。
 - 驱动不一致的节点用 `--exclude=gpuXX,gpuYY` 排掉。**为什么**：个别节点驱动版本与容器/venv 内 CUDA 库不匹配，`torch.cuda` 直接失败；模板里先 `nvidia-smi --query-gpu=driver_version` 校验，不匹配 `exit 75`，提交方加 `--exclude` 重提。
-
-### 4.1.2 剩余卡少时，时限按同类任务填写
-
-调度器用的是 Slurm。空闲卡不多时，`--time` 远大于真实耗时的作业难以插进空档，会长时间停在 Priority，即使节点上还有能放下的卡。
-
-跑过相似任务时，用那次的实际耗时填一个相近的时限，不要用模板里的 `24:00:00`。先查成功记录：
-
-```bash
-sacct -u $USER --name=<相似作业名> --format=JobID,JobName,Elapsed,State -S 2026-01-01
-```
-
-`--time` 取略高于成功那次的 `Elapsed`（留出模型加载，通常多给 20%–30%，或取整到 30 分钟）。没有同类记录时再按步骤粗估，仍然不要把时限写得很长。已在排队的作业可以直接改：`scontrol update JobId=<id> TimeLimit=01:30:00`。改完看 `squeue` 的 Reason 和 `scontrol show job` 的 StartTime。
 
 ### 4.2 `--propagate=NONE`（必加）
 
@@ -168,7 +143,7 @@ export OMP_NUM_THREADS=$OMP MKL_NUM_THREADS=$OMP OPENBLAS_NUM_THREADS=$OMP NUMEX
 KIT_THREADS=$(( NT*2/3 > 8 ? NT*2/3 : 8 ))
 ```
 
-**为什么**：节点有 64 核但你只拿到 12 核的 cgroup；库默认按 64 开线程，既触发 §4.2 的上限又互相争抢。
+**为什么**：节点有 64 核但作业可能只申请了 4 或 8 核；库若默认按全节点 64 核开线程，会触发 §4.2 的进程上限并互相争抢。
 
 - Isaac Sim / Kit：`--kit_args="--/plugins/carb.tasking.plugin/threadCount=$KIT_THREADS"`。**注意等号写法**，写成 `--kit_args "--/..."` 会被 argparse 把 `--/` 当独立选项；线程数低于 8 会卡死。
 - JAX：**不要**加 `--xla_cpu_multi_thread_eigen=false`，编译会慢 10 倍。
@@ -301,7 +276,7 @@ apptainer exec --nv \
 
 1. `#SBATCH` 全部在第一条命令之前（跑一遍 §3.1 的 awk）。
 2. 有 `--propagate=NONE`；`-o %x_%j.out`；脚本末尾 `exit $RC`。
-3. 先跑 §4.1.1，卡数选「可交 N 卡」里有节点的那一档；对不上就减少卡数或把每卡核数退回 8/9，不为了更大规格排队。剩余卡少时 `--time` 按 §4.1.2 参照同类任务的 `sacct` Elapsed，不要填过长。`--exclude` 里有已知坏节点。
+3. 卡数/核数/内存/时限按需，不是整机；`--exclude` 里有已知坏节点。
 4. 线程数从 `SLURM_CPUS_PER_TASK` 派生，没有硬编码 64。
 5. 计算节点要联网的步骤设了代理和 `HF_ENDPOINT`/`HF_HUB_DISABLE_XET`，预热类步骤有 `timeout`。
 6. 长作业有看门狗；输出目录存在且 `df -h $HOME` 还有余量（checkpoint 只留最后一个）。
