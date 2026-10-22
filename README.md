@@ -35,7 +35,6 @@ SCUTHPC-Console/
 │   ├── scut-hpc/             # SCUTHPC 集群使用 skill
 │   └── slurmbox/             # SlurmBox CLI、协议和文档
 ├── sandbox/                  # 默认盒项目目录（仅保留占位文件）
-├── tests/                    # 本地测试
 └── docs/                     # 截图和本地运行说明
 ```
 
@@ -91,18 +90,6 @@ slurmbox exec -- python train.py
 ```
 
 保活分配只负责维持资源，不执行用户代码。用户命令通过独立的 Slurm step 运行。完整的状态协议和操作说明见 [SlurmBox skill](skills/slurmbox/SKILL.md)、[用户指南](skills/slurmbox/USER_GUIDE_ZH.md) 和 [架构说明](skills/slurmbox/ARCHITECTURE.md)。
-
-## 开发与验证
-
-项目使用标准库优先的 Python 实现。修改后可运行：
-
-```bash
-PYTHONPATH=skills/slurmbox/src python -m slurmbox --help
-python -m py_compile app.py serve.py scuthpc_console/*.py skills/slurmbox/src/slurmbox/*.py
-git diff --check
-```
-
-本地开发不会自动提交或取消集群作业。需要进行真实集群操作时，请先阅读 [AGENTS.md](AGENTS.md)、[SCUTHPC skill](skills/scut-hpc/SKILL.md) 和 [SlurmBox skill](skills/slurmbox/SKILL.md)。
 
 ## 隐私与数据范围
 
