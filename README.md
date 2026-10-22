@@ -47,7 +47,7 @@ SCUTHPC-Console/
 - `scut-hpc1`：集群 1（hpckapok1）
 - `scut-hpc`：集群 2（hpckapok2）
 
-集群连接、分区和作业规则见 [SCUTHPC skill](skills/scut-hpc/SKILL.md)。
+集群连接、分区和作业规则见 [SCUTHPC skill](https://github.com/IRAgentLab/SCUTHPCSkill.git)。
 
 ### 2. 安装依赖
 
@@ -99,5 +99,5 @@ slurmbox exec -- python train.py
 
 - [华南理工科学计算平台](https://hpckapok.scut.edu.cn)
 - [SCUT HPC 用户手册](https://hpc.scut.edu.cn/docs/guide.html)
-- [SCUTHPC skill](skills/scut-hpc/SKILL.md)
+- [SCUTHPC skill](https://github.com/IRAgentLab/SCUTHPCSkill.git)
 - [SlurmBox skill](skills/slurmbox/SKILL.md)
