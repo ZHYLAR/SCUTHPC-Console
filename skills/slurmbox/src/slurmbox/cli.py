@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     doctor = sub.add_parser("doctor")
     doctor.add_argument("--dry-run", action="store_true")
     execute = sub.add_parser("exec", help="run one independent command inside the allocation")
+    execute.add_argument("--name", help="human-readable task name shown in the console")
+    execute.add_argument("--kind", choices=("task", "utility"), default="task",
+                         help="mark diagnostics as utility steps (default: task)")
     execute.add_argument("exec_command", nargs=argparse.REMAINDER)
     return parser
 
@@ -118,7 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if command[:1] == ["--"]:
                 command = command[1:]
             return run_step(
-                transport, job_id, config.allocation, command, config.cluster.remote_workdir
+                transport, job_id, config.allocation, command, config.cluster.remote_workdir,
+                name=args.name, kind=args.kind,
             )
         if args.command == "shell":
             return open_shell(transport, _require_state(state), config.allocation)

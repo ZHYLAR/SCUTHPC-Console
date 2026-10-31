@@ -4,8 +4,17 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>SCUTHPC Console</title>
+<script id="theme-init">
+(() => {
+  let saved;
+  try { saved = localStorage.getItem("scuthpc-theme"); } catch (_) {}
+  document.documentElement.dataset.theme = saved === "dark" || saved === "light" ? saved :
+    (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+})();
+</script>
 <style>
   :root {
+    color-scheme: light;
     --bg: #f3f6fb;
     --card: #ffffff;
     --text: #1b2433;
@@ -17,6 +26,52 @@
     --info: #1d6fbf;
     --soft: #f7f9fc;
     --shadow: 0 10px 30px rgba(28, 52, 84, 0.06);
+    --bg-top: #eef4fb;
+    --bar: #e7eef6;
+    --log-text: #314056;
+    --gpu-text: #5b3cc4;
+    --gpu-line: #ddd4fb;
+    --gpu-bg: #f6f3ff;
+    --own-line: #f3ddb0;
+    --own-bg: #fff8eb;
+    --danger-line: #f3c3cb;
+    --danger-bg: #fff1f2;
+    --chart-head: #f3f5f8;
+    --hover: #f4f8fd;
+    --notice-line: #e7c878;
+    --notice-button: #fff8df;
+    --notice-bg: #fffdf3;
+    --notice-text: #604a16;
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #111827;
+    --bg-top: #142033;
+    --card: #1b2638;
+    --text: #e6edf7;
+    --muted: #a8b8cf;
+    --line: #34445c;
+    --ok: #54d4a5;
+    --warn: #f4bd62;
+    --bad: #ff91a4;
+    --info: #83bdff;
+    --soft: #152033;
+    --shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+    --bar: #35465f;
+    --log-text: #cedcf0;
+    --gpu-text: #c2b0ff;
+    --gpu-line: #625187;
+    --gpu-bg: #302742;
+    --own-line: #826536;
+    --own-bg: #332b1e;
+    --danger-line: #8b4958;
+    --danger-bg: #3c2530;
+    --chart-head: #223047;
+    --hover: #253650;
+    --notice-line: #99783b;
+    --notice-button: #3d311b;
+    --notice-bg: #30291d;
+    --notice-text: #f2d393;
   }
   * { box-sizing: border-box; }
   body {
@@ -24,7 +79,7 @@
     min-height: 100vh;
     color: var(--text);
     font: 14px/1.5 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: linear-gradient(180deg, #eef4fb 0%, var(--bg) 220px);
+    background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 220px);
   }
   a { color: var(--info); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -36,15 +91,15 @@
   nav { margin: 18px 0 16px; }
   button, .linkbtn, .navbtn {
     border: 1px solid var(--line);
-    background: #fff;
+    background: var(--card);
     color: var(--text);
     border-radius: 999px;
     padding: 8px 14px;
     cursor: pointer;
     font: inherit;
   }
-  button.primary, .navbtn.active { background: #1d6fbf; color: #fff; border-color: #1d6fbf; }
-  button.danger { color: var(--bad); border-color: #f3c3cb; background: #fff; padding: 4px 10px; margin-left: 8px; }
+  button.primary, .navbtn.active { background: #1d6fbf; color: #fff; border-color: var(--info); }
+  button.danger { color: var(--bad); border-color: var(--danger-line); background: var(--card); padding: 4px 10px; margin-left: 8px; }
   button.danger:disabled { opacity: 0.6; cursor: wait; }
   details.history { padding: 0; }
   details.history > summary, details.history details > summary { cursor: pointer; list-style: none; }
@@ -53,6 +108,8 @@
   details.history .history-body { padding: 0 16px 8px; }
   details.history details { border-top: 1px solid var(--line); padding: 10px 0 4px; }
   details.history details > summary { padding: 4px 0 10px; font-weight: 600; }
+  [hidden] { display: none !important; }
+  :focus-visible { outline: 2px solid var(--info); outline-offset: 3px; }
   .view { display: none; }
   .view.active { display: block; }
   .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
@@ -75,13 +132,18 @@
   td { padding: 8px 6px; border-top: 1px solid var(--line); white-space: nowrap; }
   td.cmd { white-space: normal; min-width: 220px; }
   .table-scroll { overflow-x: auto; }
-  .tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); background: #fff; }
-  .tag.gpu { color: #5b3cc4; border-color: #ddd4fb; background: #f6f3ff; }
-  .tag.own { color: var(--warn); border-color: #f3ddb0; background: #fff8eb; }
+  .tag { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); background: var(--card); }
+  .tag.gpu { color: var(--gpu-text); border-color: var(--gpu-line); background: var(--gpu-bg); }
+  .tag.own { color: var(--warn); border-color: var(--own-line); background: var(--own-bg); }
   .job { display: grid; grid-template-columns: 280px 1fr; gap: 16px; }
   .name { font-size: 18px; font-weight: 650; }
+  .task-fold > summary { cursor: pointer; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .task-fold > summary::before { content: "▶"; font-size: 12px; color: var(--muted); }
+  .task-fold[open] > summary::before { content: "▼"; }
+  .task-fold > summary .name { flex: 1; }
+  .task-fold > .job { margin-top: 14px; }
   .id { color: var(--muted); font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-  .bar { height: 8px; border-radius: 99px; background: #e7eef6; overflow: hidden; margin: 6px 0 4px; }
+  .bar { height: 8px; border-radius: 99px; background: var(--bar); overflow: hidden; margin: 6px 0 4px; }
   .bar > i { display: block; height: 100%; border-radius: 99px; background: #1d6fbf; }
   .bar.warn > i { background: #e39b2b; }
   .bar.ok > i { background: #0c8f62; }
@@ -91,27 +153,29 @@
   .gpu strong { font-size: 18px; }
   .log {
     margin-top: 10px;
-    background: #f7f9fc;
+    background: var(--soft);
     border: 1px solid var(--line);
     border-radius: 12px;
     padding: 10px 12px;
-    color: #314056;
+    color: var(--log-text);
     font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
     max-height: 180px;
     overflow: auto;
     white-space: pre-wrap;
   }
   .empty { color: var(--muted); padding: 12px 0; }
-  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; align-items: start; }
+  .form-grid > button { margin-top: 20px; }
   .form-grid label { display: grid; gap: 4px; color: var(--muted); font-size: 12px; }
-  .form-grid select { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 8px; background: #fff; color: var(--text); font: inherit; }
-  .info-tip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 5px; border: 1px solid #9bb6d4; border-radius: 50%; color: #1d6fbf; font-size: 12px; font-weight: 700; cursor: help; vertical-align: -2px; }
-  .info-tip .tip { display: none; position: absolute; z-index: 30; left: 24px; bottom: -4px; width: 250px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: var(--shadow); color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left; }
+  .form-grid select, .form-grid input { width: 100%; border: 1px solid var(--line); border-radius: 9px; padding: 8px; background: var(--card); color: var(--text); font: inherit; }
+  .form-grid [hidden] { display: none; }
+  .info-tip { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; margin-left: 5px; border: 1px solid var(--line); border-radius: 50%; color: var(--info); font-size: 12px; font-weight: 700; cursor: help; vertical-align: -2px; }
+  .info-tip .tip { display: none; position: absolute; z-index: 30; left: 24px; bottom: -4px; width: 250px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); box-shadow: var(--shadow); color: var(--text); font-size: 12px; font-weight: 400; line-height: 1.45; text-align: left; }
   .info-tip:hover .tip, .info-tip:focus .tip { display: block; }
   .duration-edit { margin-top: 10px; display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
-  .duration-edit select { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; background: #fff; color: var(--text); font: inherit; }
+  .duration-edit select { border: 1px solid var(--line); border-radius: 8px; padding: 5px 7px; background: var(--card); color: var(--text); font: inherit; }
   .duration-edit button { padding: 5px 9px; }
-  .job .stuck { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 10px; background: #fff1f2; color: var(--bad); border: 1px solid #ffd0d6; }
+  .job .stuck { grid-column: 1 / -1; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--danger-bg); color: var(--bad); border: 1px solid var(--danger-line); }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
   .chip { border: 1px solid var(--line); background: var(--soft); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
   .chip b { font-variant-numeric: tabular-nums; }
@@ -119,14 +183,14 @@
   .combo b { font-size: 18px; margin-right: 6px; }
   .card.flat { padding: 0; overflow: hidden; }
   .job-head { padding: 14px 16px 10px; }
-  .chart-panel { border-top: 1px solid var(--line); background: #fff; }
-  .chart-head { background: #f3f5f8; padding: 8px 16px; font-weight: 650; }
+  .chart-panel { border-top: 1px solid var(--line); background: var(--card); }
+  .chart-head { background: var(--chart-head); padding: 8px 16px; font-weight: 650; }
   .chart-head .hint { font-weight: 400; }
-  .chart-canvas { width: 100%; height: 220px; display: block; background: #fff; cursor: crosshair; }
+  .chart-canvas { width: 100%; height: 220px; display: block; background: var(--card); cursor: crosshair; }
   .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; padding: 0 16px 10px; font-size: 12px; color: var(--muted); }
   .swatch { display: inline-block; width: 16px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
   .rowlink { cursor: pointer; }
-  .rowlink:hover td { background: #f4f8fd; }
+  .rowlink:hover td { background: var(--hover); }
   .notice-fab {
     position: fixed;
     right: 20px;
@@ -136,9 +200,9 @@
     height: 38px;
     border-radius: 50%;
     padding: 0;
-    border: 1px solid #e7c878;
-    background: #fff8df;
-    color: #8a5b00;
+    border: 1px solid var(--notice-line);
+    background: var(--notice-button);
+    color: var(--notice-text);
     box-shadow: 0 8px 20px rgba(72, 55, 15, 0.16);
     font-weight: 700;
     font-size: 18px;
@@ -151,10 +215,10 @@
     z-index: 19;
     width: min(330px, calc(100vw - 92px));
     padding: 12px 14px;
-    border: 1px solid #e7c878;
+    border: 1px solid var(--notice-line);
     border-radius: 10px;
-    background: #fffdf3;
-    color: #604a16;
+    background: var(--notice-bg);
+    color: var(--notice-text);
     box-shadow: 0 12px 28px rgba(72, 55, 15, 0.15);
     font-size: 12px;
     line-height: 1.55;
@@ -170,9 +234,9 @@
     top: 74px;
     width: 12px;
     height: 12px;
-    border-top: 1px solid #e7c878;
-    border-right: 1px solid #e7c878;
-    background: #fffdf3;
+    border-top: 1px solid var(--notice-line);
+    border-right: 1px solid var(--notice-line);
+    background: var(--notice-bg);
     transform: rotate(45deg);
   }
   .notice-wrap:hover .notice-popover, .notice-wrap:focus-within .notice-popover {
@@ -199,6 +263,7 @@
     <div class="actions">
       <a class="linkbtn" id="jobsLink" href="https://hpckapok.scut.edu.cn/mis/user/historyJobs" target="_blank" rel="noopener">作业历史</a>
       <a class="linkbtn" id="filesLink" href="#" target="_blank" rel="noopener">文件存储</a>
+      <button id="themeToggle" type="button" aria-pressed="false">深色模式</button>
       <button id="notifyBtn" type="button">开启结束通知</button>
       <button class="primary" id="refresh" type="button">立即刷新</button>
     </div>
@@ -216,7 +281,7 @@
   <section class="view" id="view-sandbox"></section>
   <section class="view" id="view-history"></section>
 </div>
-<div class="notice-wrap">
+<div class="notice-wrap" id="resourceNotice" hidden>
   <button class="notice-fab" type="button" aria-label="查看调度预测说明" title="调度预测说明">!</button>
   <div class="notice-popover" role="note">
     <strong>注意：空卡不等于立即可用</strong><br />
@@ -226,6 +291,25 @@
 <script>
 const jobsUrl = "https://hpckapok.scut.edu.cn/mis/user/historyJobs";
 const $ = (id) => document.getElementById(id);
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const dark = theme === "dark";
+  $("themeToggle").textContent = dark ? "浅色模式" : "深色模式";
+  $("themeToggle").setAttribute("aria-pressed", String(dark));
+  $("themeToggle").setAttribute("aria-label", dark ? "切换到浅色模式" : "切换到深色模式");
+  requestAnimationFrame(mountCharts);
+}
+applyTheme(document.documentElement.dataset.theme);
+$("themeToggle").onclick = () => {
+  const theme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  try { localStorage.setItem("scuthpc-theme", theme); } catch (_) {}
+  applyTheme(theme);
+};
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (event) => {
+  let saved;
+  try { saved = localStorage.getItem("scuthpc-theme"); } catch (_) {}
+  if (saved !== "light" && saved !== "dark") applyTheme(event.matches ? "dark" : "light");
+});
 const fmt = (n) => (n == null ? "—" : Number(n).toLocaleString("zh-CN"));
 function fmtBytes(n) {
   if (n == null) return "—";
@@ -309,6 +393,18 @@ function etaFromLine(line, cur, tot) {
 function parseExperiment(lines) {
   const rows = (lines || []).map((l) => l.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")).reverse();
   for (const line of rows) {
+    if (line.startsWith("SCUTHPC_PROGRESS ")) {
+      try {
+        const progress = JSON.parse(line.slice("SCUTHPC_PROGRESS ".length));
+        const cur = progress.current, tot = progress.total;
+        if (Number.isFinite(cur) && Number.isFinite(tot) && tot > 0 && cur >= 0 && cur <= tot) {
+          return { pct: cur / tot * 100, text: `${cur.toLocaleString("zh-CN")} / ${tot.toLocaleString("zh-CN")}`,
+            label: typeof progress.label === "string" ? progress.label.slice(0, 48) : "",
+            eta: Number.isFinite(progress.eta_seconds) && progress.eta_seconds >= 0 ? "还要约 " + formatDuration(progress.eta_seconds) : "" };
+        }
+      } catch (_) {}
+      continue;
+    }
     const interesting = /%\||s\/it|it\/s|epoch|step|iter|batch/i.test(line);
     const frac = line.match(/(\d+)\s*\/\s*(\d+)/);
     if (frac && interesting) {
@@ -364,10 +460,10 @@ function comboBlock(c) {
     return `<div class="combo"><b>${sample.cards} 卡</b><span class="hint">× ${list.length} 台 · 1 卡 ${sample.cores} 核 · ${esc(sample.n.partition)}</span><div class="hint">${esc(names)}${more}</div></div>`;
   }).join("");
   const blockedHtml = blocked.length
-    ? `<p class="hint">空卡但 CPU 或内存不够，单机放不上：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核 / ${fmtBytes((r.n.sched_mem_free_mb || 0) * 1024 * 1024)}`).join("，")}</p>`
+    ? `<p class="hint">按每卡 24 GiB 估算，以下节点 CPU 或内存不够；小任务可到申请盒自定义内存：${blocked.map((r) => `${esc(r.n.name)} 剩 ${r.n.gpu_free} 卡 / ${r.n.cpu_free} 核 / ${fmtBytes((r.n.sched_mem_free_mb || 0) * 1024 * 1024)}`).join("，")}</p>`
     : "";
   const max = ok.reduce((m, r) => Math.max(m, r.cards), 0);
-  return `<h2 style="margin-top:14px">资源可放置 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">物理可放置 ≠ 立即启动。</p>${probeText(c)}${lines || `<p class="hint">现在没有满足 GPU/CPU/内存的单机组合</p>`}${blockedHtml}`;
+  return `<h2 style="margin-top:14px">资源可放置 <span class="tag">最多 ${max} 卡</span></h2><p class="hint">按每卡 24 GiB 估算；内存可按需申请。物理可放置 ≠ 立即启动。</p>${probeText(c)}${lines || `<p class="hint">现在没有满足上述 GPU/CPU/内存的单机组合</p>`}${blockedHtml}`;
 }
 const lowStreak = {};
 function stuckCount(job) {
@@ -429,22 +525,16 @@ function resourcePage(clusters) {
   }).join("");
 }
 
-function jobCard(job, clusterLabel) {
+function jobCard(job, clusterLabel, clusterId) {
   const limit = job.limit_sec || 0;
   const elapsed = job.elapsed_sec || 0;
   const timePct = limit ? Math.min(100, elapsed / limit * 100) : 0;
   const exp = parseExperiment(job.log);
-  const gpus = job.gpus || [];
-  const gpuHtml = gpus.length ? `<div class="gpus">${gpus.map((g) => {
-    const memPct = g.mem_total ? g.mem_used / g.mem_total * 100 : 0;
-    return `<div class="gpu">
-      <div class="top"><span>GPU ${g.index}</span><span>${Math.round(g.temp)}°C · ${Math.round(g.power)}W</span></div>
-      <strong class="${g.util < 5 ? "warn" : "ok"}">${Math.round(g.util)}%</strong>
-      ${bar(g.util, g.util < 5 ? "warn" : "ok")}
-      <div class="top"><span>显存 ${(g.mem_used / 1024).toFixed(1)} / ${(g.mem_total / 1024).toFixed(0)} GB</span></div>
-      ${bar(memPct)}
-    </div>`;
-  }).join("")}</div>` : `<div class="empty">${job.state === "RUNNING" ? esc(job.metrics_error || "无 GPU 采样") : "排队中，尚未占用计算卡"}</div>`;
+  const sample = liveGpuSample(job.id, clusterId);
+  const gpus = sample ? (sample.gpus || []) : (job.gpus || []);
+  const gpuHtml = job.state === "PENDING"
+    ? `<div class="empty">排队中，尚未占用计算卡</div>`
+    : gpuPanel(gpus, job.state === "RUNNING", gpuSamplingError(sample?.error || job.metrics_error));
   const idleFor = lowStreak[job.id] || 0;
   const stuck = idleFor >= 3 ? `<div class="stuck">显卡利用率已连续 ${idleFor} 次低于 5%（约 ${idleFor * 20} 秒），作业可能卡住。</div>` : "";
   const expHtml = exp
@@ -560,6 +650,7 @@ function paintChart(canvas) {
   const packed = seriesOf(canvas.dataset.job, field, canvas.dataset.span || "live");
   canvas.width = Math.round(cssW * dpr);
   canvas.height = Math.round(cssH * dpr);
+  const colors = getComputedStyle(document.documentElement);
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssW, cssH);
@@ -576,14 +667,14 @@ function paintChart(canvas) {
   for (let i = 0; i <= 4; i++) {
     const y = pad.t + ph * (i / 4);
     const val = yMax * (1 - i / 4);
-    ctx.strokeStyle = "#e6ebf1";
+    ctx.strokeStyle = colors.getPropertyValue("--line").trim();
     ctx.setLineDash([3, 4]);
     ctx.beginPath();
     ctx.moveTo(pad.l, y);
     ctx.lineTo(pad.l + pw, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "#98a2b3";
+    ctx.fillStyle = colors.getPropertyValue("--muted").trim();
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     ctx.fillText(field === "util" ? Math.round(val) + "%" : formatGb(val), pad.l - 8, y);
@@ -592,7 +683,7 @@ function paintChart(canvas) {
   ctx.textBaseline = "top";
   for (let i = 0; i <= 4; i++) {
     const x = pad.l + pw * (i / 4);
-    ctx.fillStyle = "#98a2b3";
+    ctx.fillStyle = colors.getPropertyValue("--muted").trim();
     ctx.fillText(tickLabel(t0 + (t1 - t0) * (i / 4)), x, pad.t + ph + 8);
   }
   packed.series.forEach((s) => {
@@ -652,8 +743,9 @@ function drawHover(ctx, canvas, geom) {
     };
   }).filter(Boolean);
   const gx = pad.l + pw * ((nearest.t - t0) / (t1 - t0));
+  const colors = getComputedStyle(document.documentElement);
   ctx.save();
-  ctx.strokeStyle = "#9aa6b8";
+  ctx.strokeStyle = colors.getPropertyValue("--muted").trim();
   ctx.setLineDash([2, 2]);
   ctx.beginPath();
   ctx.moveTo(gx, pad.t);
@@ -677,8 +769,8 @@ function drawHover(ctx, canvas, geom) {
   let bx = gx + 12;
   let by = pad.t + 6;
   if (bx + boxW > canvas.clientWidth - 4) bx = Math.max(pad.l, gx - boxW - 12);
-  ctx.fillStyle = "rgba(255,255,255,0.96)";
-  ctx.strokeStyle = "#d5deea";
+  ctx.fillStyle = colors.getPropertyValue("--card").trim();
+  ctx.strokeStyle = colors.getPropertyValue("--line").trim();
   ctx.lineWidth = 1;
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(bx, by, boxW, boxH, 6);
@@ -688,7 +780,7 @@ function drawHover(ctx, canvas, geom) {
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   lines.forEach((line, i) => {
-    ctx.fillStyle = i === 0 ? "#5d6b80" : rows[i - 1].color;
+    ctx.fillStyle = i === 0 ? colors.getPropertyValue("--muted").trim() : rows[i - 1].color;
     ctx.fillText(line, bx + 8, by + 6 + i * 16);
   });
   ctx.restore();
@@ -717,15 +809,17 @@ function curveCard(job, clusterLabel) {
   </article>`;
 }
 let gpuBusy = false;
+let gpuData = null;
 async function pollGpu() {
   if (gpuBusy) return;
   gpuBusy = true;
   try {
     const res = await fetch("/api/gpu");
     if (!res.ok) return;
-    rememberGpu(await res.json());
+    gpuData = await res.json();
+    rememberGpu(gpuData);
     if (view === "jobs" && jobMode === "curves") mountCharts();
-    if (view === "sandbox" && snapshot) render();
+    if (snapshot && (view === "sandbox" || (view === "jobs" && jobMode !== "curves"))) render();
     if (view === "history" && expandedCurves.size) mountCharts();
   } catch (e) {
   } finally {
@@ -784,6 +878,8 @@ function watchJobs(data) {
 let snapshot = null;
 let sandboxData = null;
 let sandboxOptions = null;
+let sandboxRequestPending = false;
+let sandboxRequestMessage = "";
 let view = location.hash.replace("#", "") || "overview";
 if (!["overview", "resources", "jobs", "sandbox", "history"].includes(view)) view = "overview";
 
@@ -791,6 +887,7 @@ function show(name) {
   view = name;
   document.querySelectorAll(".navbtn").forEach((b) => b.classList.toggle("active", b.dataset.view === name));
   document.querySelectorAll(".view").forEach((el) => el.classList.toggle("active", el.id === "view-" + name));
+  $("resourceNotice").hidden = name !== "overview";
   history.replaceState(null, "", "#" + name);
 }
 
@@ -800,7 +897,7 @@ function render() {
   const jobs = [];
   const recent = [];
   clusters.forEach((c) => {
-    (c.jobs || []).forEach((j) => jobs.push({ job: j, label: c.label }));
+    (c.jobs || []).forEach((j) => jobs.push({ job: j, label: c.label, clusterId: c.id }));
     (c.recent || []).forEach((r) => recent.push({ ...r, cluster: c.id }));
   });
   recent.sort((a, b) => String(a.end).localeCompare(String(b.end)));
@@ -821,11 +918,11 @@ function render() {
       }).join("") + `</tbody></table></div>` : `<div class="empty">当前没有在跑作业</div>`) +
     `</article>`;
   $("view-resources").innerHTML = resourcePage(clusters);
-  const jobBody = jobs.length ? jobs.map(({ job, label }) => jobMode === "curves" && (/gpu/i.test(job.gres || "") || /gpu/i.test(job.partition || "") || gpuSeries(job.id).length) ? curveCard(job, label) : jobCard(job, label)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
+  const jobBody = jobs.length ? jobs.map(({ job, label, clusterId }) => jobMode === "curves" && (/gpu/i.test(job.gres || "") || /gpu/i.test(job.partition || "") || gpuSeries(job.id).length) ? curveCard(job, label) : jobCard(job, label, clusterId)).join("") : `<article class="card"><div class="empty">当前没有属于你的在跑或排队作业</div></article>`;
   $("view-jobs").innerHTML = `<div class="actions" style="margin-bottom:12px"><button type="button" data-mode="cards" class="${jobMode === "curves" ? "" : "primary"}">卡片</button><button type="button" data-mode="curves" class="${jobMode === "curves" ? "primary" : ""}">曲线</button><span class="hint">曲线每 5 秒采样，最近 6 小时留在本机</span></div>${jobBody}`;
   document.querySelectorAll("[data-mode]").forEach((btn) => btn.onclick = () => { jobMode = btn.dataset.mode; localStorage.setItem("scuthpc-job-mode", jobMode); render(); });
   const previousSandboxForm = document.querySelector("[data-sandbox-request]");
-  const previousSandboxValues = previousSandboxForm ? Object.fromEntries(new FormData(previousSandboxForm)) : null;
+  const previousSandboxValues = previousSandboxForm ? Object.fromEntries(Array.from(previousSandboxForm.elements).filter((el) => el.name).map((el) => [el.name, el.value])) : null;
   $("view-sandbox").innerHTML = sandboxPage();
   const currentSandboxForm = document.querySelector("[data-sandbox-request]");
   if (currentSandboxForm && previousSandboxValues) {
@@ -838,9 +935,19 @@ function render() {
   if (requestForm) requestForm.onsubmit = requestSandbox;
   document.querySelectorAll("[data-update-duration-form]").forEach((form) => { form.onsubmit = updateSandboxDuration; });
   document.querySelectorAll("[data-sandbox-gpus], [data-sandbox-cluster]").forEach((el) => el.onchange = () => { updateSandboxGpuChoices(); updateSandboxPreview(); });
+  document.querySelector("[data-sandbox-memory-mode]")?.addEventListener("change", updateSandboxPreview);
+  document.querySelector("[data-sandbox-memory-gib]")?.addEventListener("input", updateSandboxPreview);
   updateSandboxGpuChoices();
   updateSandboxPreview();
   document.querySelectorAll("[data-history-key]").forEach((el) => el.addEventListener("toggle", () => { if (el.open) touchSandboxHistory(el.dataset.historyKey); }));
+  document.querySelectorAll("[data-sandbox-utility]").forEach((el) => el.addEventListener("toggle", () => {
+    if (el.open) expandedUtilityGroups.add(el.dataset.sandboxUtility);
+    else expandedUtilityGroups.delete(el.dataset.sandboxUtility);
+  }));
+  document.querySelectorAll("[data-task-fold]").forEach((el) => el.addEventListener("toggle", () => {
+    taskFoldState[el.dataset.taskFold] = el.open;
+    try { localStorage.setItem("scuthpc-task-folds", JSON.stringify(taskFoldState)); } catch (_) {}
+  }));
   $("view-history").innerHTML = `<article class="card"><h2>近两日作业</h2>${historyTable(recent.slice(-24))}<p class="hint">作业号跳转到门户历史页，门户里可以看完整日志。</p></article>`;
   document.querySelectorAll("[data-go]").forEach((el) => el.onclick = () => show(el.dataset.go));
   document.querySelectorAll("[data-curve]").forEach((btn) => btn.onclick = () => {
@@ -870,7 +977,8 @@ function gpuPanel(gpus, running, error) {
   if (gpus && gpus.length) {
     return `<div class="gpus">${gpus.map((gpu) => {
       const memPct = gpu.mem_total ? gpu.mem_used / gpu.mem_total * 100 : 0;
-      const temp = gpu.temp == null ? "" : `${Math.round(gpu.temp)}°C · ${Math.round(gpu.power || 0)}W`;
+      const temp = [Number.isFinite(gpu.temp) ? `${Math.round(gpu.temp)}°C` : "",
+        Number.isFinite(gpu.power) ? `${Math.round(gpu.power)}W` : ""].filter(Boolean).join(" · ");
       return `<div class="gpu">
         <div class="top"><span>GPU ${gpu.index}</span><span>${temp}</span></div>
         <strong class="${gpu.util < 5 ? "warn" : "ok"}">${Math.round(gpu.util)}%</strong>
@@ -883,7 +991,26 @@ function gpuPanel(gpus, running, error) {
   if (running) return `<div class="empty">${esc(error || "无 GPU 采样")}</div>`;
   return `<div class="empty">任务已结束，没有实时显卡</div>`;
 }
+function liveGpuSample(id, clusterId) {
+  return (gpuData?.jobs || []).find((job) => String(job.id) === String(id)
+    && (!clusterId || job.cluster === clusterId));
+}
+function gpuSamplingError(error) {
+  const raw = String(error || "");
+  if (/timed out|timeout/i.test(raw)) return "GPU 采样超时，正在重试";
+  if (/busy|temporarily disabled|unable to create step|resources/i.test(raw)) return "GPU 采样步骤暂时无法启动，正在重试";
+  return raw || "尚未取得 GPU 采样，正在重试";
+}
+function sandboxGpuSample(box) {
+  return liveGpuSample(box.job_id, box.cluster_id);
+}
+function sandboxGpuError(box, job) {
+  const sample = sandboxGpuSample(box);
+  return gpuSamplingError(sample?.error || box.gpu_error || job?.metrics_error);
+}
 function sandboxGpus(box) {
+  const sample = sandboxGpuSample(box);
+  if (sample) return sample.gpus || [];
   if (box.gpus && box.gpus.length) return box.gpus;
   const job = findSnapshotJob(box.job_id);
   return (job && job.gpus) || [];
@@ -922,19 +1049,26 @@ function sandboxAllocCard(box) {
       ${box.error && !box.history ? `<p class="bad">${esc(box.error)}</p>` : ""}
       ${!box.history && box.job_id ? durationEditor(box) : ""}
     </div>
-    <div>${gpuPanel(sandboxGpus(box), running, box.gpu_error || (job && job.metrics_error))}<p class="hint">保活日志</p>${log}</div>
+    <div>${gpuPanel(sandboxGpus(box), running, sandboxGpuError(box, job))}<p class="hint">保活日志</p>${log}</div>
   </article>`;
 }
 function isProgressLine(line) {
-  return /%\||it\/s|s\/it|\d+\s*\/\s*\d+/.test(line || "");
+  return /SCUTHPC_PROGRESS |%\||it\/s|s\/it|\d+\s*\/\s*\d+/.test(line || "");
+}
+function genericStepName(name) {
+  return /^(bash|sh|env|python[\d.]*|sleep|timeout|srun|nvidia-smi|step)$/i.test(name || "");
 }
 function sandboxStepTitle(step) {
+  const title = String(step.task_name || "").trim();
+  if (title && !genericStepName(title)) return title;
   const name = String(step.name || "").trim();
-  if (name && !/^(bash|sh|python|python3|sleep)$/i.test(name)) return name;
+  if (name === "slurmbox-shell") return "交互终端";
+  if (name && !genericStepName(name)) return name;
   const script = String(step.command || "").match(/([\w.-]+\.(?:py|sh))/);
   if (script) return script[1];
-  const line = (step.log || []).map((item) => String(item).replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").trim()).find((text) => text && !text.startsWith("{") && text.length < 80 && !isProgressLine(text));
-  return line || name || "任务";
+  const module = String(step.command || "").match(/\bpython[\d.]*\s+(?:-u\s+)?-m\s+([\w.]+)/);
+  if (module) return module[1];
+  return name ? `未命名步骤（${name}）` : "未命名步骤";
 }
 function sandboxStepCard(step, box) {
   const running = !box.history && /RUN/i.test(step.state || "");
@@ -948,28 +1082,32 @@ function sandboxStepCard(step, box) {
     : `用时 ${esc(step.elapsed || "—")} · 退出 ${esc(step.exit || "—")}${step.end ? " · 结束 " + esc(step.end) : ""}`;
   const log = (step.log || []).length
     ? `<div class="log">${step.log.map(esc).join("\n")}</div>`
-    : `<p class="hint">${running ? "还没有读到这步的日志" : "这步没有留下日志。之后的 slurmbox exec 会写入 steps/作业号.步号.log"}</p>`;
+    : `<p class="hint">${step.name === "slurmbox-shell" ? "交互终端的输出不会自动留存。" : running ? "暂未读到输出；若程序正在运行，请检查日志是否刷新。" : "没有可读取的日志。旧步骤无法补回未保存的输出。"} 新任务可用 slurmbox exec --name 指定名称并自动留存日志。</p>`;
   const cancellable = running && new RegExp("^" + String(box.job_id) + "\\.\\d+$").test(String(step.id || ""));
   const cancelBtn = cancellable
     ? `<button type="button" class="danger" data-cancel-job="${esc(box.job_id)}" data-cancel-step="${esc(step.id)}" data-cancel-name="${esc(sandboxStepTitle(step)).replace(/"/g, "&quot;")}">结束任务</button>`
     : "";
-  return `<article class="card job">
+  const foldKey = `${box.cluster_id || ""}|${box.job_id}|${step.id}`;
+  const open = Object.prototype.hasOwnProperty.call(taskFoldState, foldKey) ? taskFoldState[foldKey] : running;
+  return `<details class="card task-fold" data-task-fold="${esc(foldKey)}" ${open ? "open" : ""}><summary><span class="name">${esc(sandboxStepTitle(step))}</span><span class="id">${esc(step.id)}</span><span class="tag ${stateClass(step.state)}">${esc(step.state || "—")}</span></summary><div class="job">
     <div>
       <div class="name">${esc(sandboxStepTitle(step))}</div>
       <div class="id">${esc(step.id)} · ${esc(step.nodelist || "—")}</div>
       <p><span class="tag ${stateClass(step.state)}">${esc(step.state || "—")}</span>${cancelBtn}</p>
       <div class="hint">${timeHint}</div>
-      ${running && box.live && box.live.limit_sec ? bar(Math.min(100, ((box.live.elapsed_sec || 0) / box.live.limit_sec) * 100)) : ""}
       ${expHtml}
     </div>
-    <div>${gpuPanel(running ? sandboxGpus(box) : [], running, box.gpu_error)}${log}</div>
-  </article>`;
+    <div><p class="hint">任务日志 · <code>steps/${esc(step.id)}.log</code>${running ? " · 显卡状态见上方盒分配" : ""}</p>${log}</div>
+  </div></details>`;
 }
 function isProbeStep(step) {
-  const name = step.name || "";
-  const command = step.command || "";
-  if (name === "nvidia-smi" || name === "scuthpc-probe" || /nvidia-smi/.test(command)) return true;
-  return name === "bash" && step.elapsed_sec != null && step.elapsed_sec <= 2 && !(step.log || []).length;
+  return step.name === "scuthpc-probe";
+}
+function isUtilityStep(step) {
+  if (/RUN|PENDING|CONFIGURING|COMPLETING/i.test(step.state || "")) return false;
+  if (step.task_kind === "utility") return true;
+  return genericStepName(step.task_name || step.name) && !(step.log || []).length
+    && sandboxStepTitle(step).startsWith("未命名步骤");
 }
 const SANDBOX_HISTORY_KEY = "scuthpc-sandbox-history-v1";
 const SANDBOX_HISTORY_LIMIT = 10;
@@ -1032,14 +1170,23 @@ function touchSandboxHistory(key) {
   found.used = Date.now();
   saveSandboxHistory(items);
 }
+const expandedUtilityGroups = new Set();
+let taskFoldState = {};
+try { taskFoldState = JSON.parse(localStorage.getItem("scuthpc-task-folds") || "{}"); } catch (_) {}
+if (!taskFoldState || typeof taskFoldState !== "object" || Array.isArray(taskFoldState)) taskFoldState = {};
 function sandboxCard(box) {
   const tasks = (box.steps || []).filter((step) => step.kind === "task" && !isProbeStep(step));
   const hidden = (box.steps || []).filter((step) => step.kind === "task" && isProbeStep(step)).length;
-  const taskBody = tasks.length
-    ? tasks.map((step) => sandboxStepCard(step, box)).join("")
-    : `<article class="card"><div class="empty">${box.job_id ? "这条分配里还没有用户任务。slurmbox exec 或 shell 启动后会出现在这里。" : "这个目录还没有盒记录。在项目里执行 slurmbox start 后，这里会显示分配和其中的任务。"}</div></article>`;
+  const primary = tasks.filter((step) => !isUtilityStep(step));
+  const utilities = tasks.filter(isUtilityStep);
+  const taskBody = primary.length
+    ? primary.map((step) => sandboxStepCard(step, box)).join("")
+    : `<article class="card"><div class="empty">${utilities.length ? "当前没有运行中或已命名的任务；其余步骤可在下方展开查看。" : box.job_id ? "这条分配里还没有用户任务。slurmbox exec 或 shell 启动后会出现在这里。" : "这个目录还没有盒记录。在项目里执行 slurmbox start 后，这里会显示分配和其中的任务。"}</div></article>`;
   const note = hidden ? `<p class="hint">已隐藏 ${hidden} 个控制台自己的显卡采样步</p>` : "";
-  return `${sandboxAllocCard(box)}<h2 style="margin:4px 0 10px">盒任务 <span class="tag">${tasks.length}</span></h2>${note}${taskBody}`;
+  const failed = utilities.filter((step) => /FAIL|CANCEL|TIMEOUT|OUT_OF_MEMORY|NODE_FAIL/i.test(step.state || "")).length;
+  const key = `${box.root || ""}|${box.job_id || ""}`;
+  const extra = utilities.length ? `<details class="card" data-sandbox-utility="${esc(key)}" ${expandedUtilityGroups.has(key) ? "open" : ""}><summary>辅助和未命名的已结束步骤 <span class="tag">${utilities.length}</span>${failed ? ` <span class="bad">${failed} 个未成功</span>` : ""}</summary><p class="hint">诊断步骤，以及没有日志的旧 bash / env 等步骤集中在这里，展开可查看状态。</p>${utilities.map((step) => sandboxStepCard(step, box)).join("")}</details>` : "";
+  return `${sandboxAllocCard(box)}<h2 style="margin:4px 0 10px">盒任务 <span class="tag">${primary.length}</span></h2>${note}${taskBody}${extra}`;
 }
 function durationLabel(minutes) {
   return minutes < 60 ? `${minutes} 分钟` : (minutes % 60 ? `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟` : `${minutes / 60} 小时`);
@@ -1074,9 +1221,11 @@ function sandboxRequestCard() {
       <label>项目<select name="project">${projectOptions}</select></label>
       <label>GPU 卡数<select data-sandbox-gpus name="gpus">${[1,2,3,4,5,6,7,8].filter((n) => n <= (clusters[0].max_gpus || 8)).map((n) => `<option value="${n}" ${n === 1 ? "selected" : ""}>${n} 张</option>`).join("")}</select></label>
       <label>时长<select name="duration_minutes">${durationOptions}</select></label>
+      <label>内存申请<select data-sandbox-memory-mode name="memory_mode"><option value="fixed">常规 · 每卡 24 GiB</option><option value="custom">自定义 · 按需申请</option></select></label>
+      <label data-sandbox-custom-memory hidden>总内存（GiB）<input data-sandbox-memory-gib name="memory_gib" aria-label="总内存（GiB）" aria-describedby="sandbox-memory-limit" type="number" min="0.0009765625" max="1048576" step="any" value="24" required disabled><span class="hint" id="sandbox-memory-limit" data-sandbox-memory-limit></span></label>
       <label>自动资源<span class="chip" data-sandbox-preview>正在计算…</span></label>
       <button class="primary" type="submit">申请盒</button>
-    </div><p class="hint" data-sandbox-message>CPU 按集群每卡配额自动计算，内存按每卡 24 GiB 计算。</p></form></article>`;
+    </div><p class="hint" data-sandbox-memory-hint></p><p class="hint" data-sandbox-message>${esc(sandboxRequestMessage)}</p></form></article>`;
 }
 function selectedSandboxCluster() {
   const id = document.querySelector("[data-sandbox-cluster]")?.value;
@@ -1084,9 +1233,35 @@ function selectedSandboxCluster() {
 }
 function updateSandboxPreview() {
   const cluster = selectedSandboxCluster();
-  const gpus = Number(document.querySelector("[data-sandbox-gpus]")?.value || 1);
-  const target = document.querySelector("[data-sandbox-preview]");
-  if (target && cluster) target.textContent = `${cluster.cores_per_gpu * gpus} 核 · ${cluster.mem_gib_per_gpu * gpus}G`;
+  const form = document.querySelector("[data-sandbox-request]");
+  if (!form || !cluster) return;
+  const gpus = Number(form.elements.gpus.value || 1);
+  const mode = form.elements.memory_mode.value === "custom" ? "custom" : "fixed";
+  form.elements.memory_mode.value = mode;
+  const custom = form.elements.memory_gib;
+  form.querySelector("[data-sandbox-custom-memory]").hidden = mode !== "custom";
+  custom.disabled = mode !== "custom";
+  const live = (snapshot?.clusters || []).find((c) => c.id === cluster.id);
+  const hasRecommendations = Object.prototype.hasOwnProperty.call(live?.sandbox_memory || {}, String(gpus));
+  const recommendation = live?.ok ? live.sandbox_memory?.[String(gpus)] : null;
+  let memory = `${cluster.mem_gib_per_gpu * gpus} GiB`;
+  let hint = "CPU 按每卡配额计算。常规内存为每卡 24 GiB，也可切换自定义按需填写。";
+  const memoryLabel = (mib) => `${(mib / 1024).toLocaleString("zh-CN", { maximumFractionDigits: 3 })} GiB`;
+  let limit = "";
+  if (mode === "custom") {
+    const gib = Number(custom.value);
+    memory = custom.value && gib > 0 && Number.isFinite(gib) ? memoryLabel(Math.ceil(gib * 1024)) : "请输入内存";
+    limit = recommendation
+      ? `当前资源最大可选约 ${memoryLabel(recommendation.memory_mib)}（${recommendation.memory_mib} MiB），参考 ${recommendation.node}。`
+      : (!live?.ok ? "暂时无法读取集群资源，可手动填写内存。"
+        : !hasRecommendations ? "暂无内存余量数据，请刷新；若仍未显示请重启控制台。"
+        : "当前没有满足所选卡数和 CPU 的可用内存，可手动填写并排队。");
+    hint = "填写整条分配的总内存，可填小数，按 MiB 向上取整，不要求是 24 GiB 的倍数。可用上限按同一节点的卡数、CPU 和调度剩余内存计算，超过当前上限可能需要排队，不保证立即启动。";
+  }
+  form.querySelector("[data-sandbox-memory-limit]").textContent = limit;
+  form.querySelector("[data-sandbox-preview]").textContent = `${cluster.cores_per_gpu * gpus} 核 · ${memory}`;
+  form.querySelector("[data-sandbox-memory-hint]").textContent = hint;
+  form.querySelector("button[type=submit]").disabled = sandboxRequestPending;
 }
 function updateSandboxGpuChoices() {
   const select = document.querySelector("[data-sandbox-gpus]");
@@ -1098,22 +1273,29 @@ function updateSandboxGpuChoices() {
 }
 async function requestSandbox(event) {
   event.preventDefault();
+  if (sandboxRequestPending) return;
   const form = event.currentTarget;
-  const message = form.querySelector("[data-sandbox-message]");
   const button = form.querySelector("button[type=submit]");
+  const setMessage = (text) => {
+    sandboxRequestMessage = text;
+    const target = document.querySelector("[data-sandbox-message]");
+    if (target) target.textContent = text;
+  };
+  const payload = Object.fromEntries(new FormData(form));
+  sandboxRequestPending = true;
   button.disabled = true;
-  message.textContent = "正在提交 sbatch…";
+  setMessage("正在提交 sbatch…");
   try {
-    const res = await fetch("/api/sandbox/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.fromEntries(new FormData(form))) });
+    const res = await fetch("/api/sandbox/request", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const data = await res.json();
     if (!res.ok || !data.ok) throw new Error(data.error || "申请失败");
-    message.textContent = `已提交盒作业 ${data.job_id}，正在刷新状态。`;
+    setMessage(`已提交盒作业 ${data.job_id}，正在刷新状态。`);
     const refreshed = await fetch("/api/sandbox");
     if (refreshed.ok) sandboxData = await refreshed.json();
     render();
   } catch (err) {
-    message.textContent = String(err);
-  } finally { button.disabled = false; }
+    setMessage(String(err));
+  } finally { sandboxRequestPending = false; updateSandboxPreview(); }
 }
 async function updateSandboxDuration(event) {
   event.preventDefault();

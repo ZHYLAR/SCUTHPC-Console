@@ -70,6 +70,16 @@ cp config.example.json config.json
 
 ### 4. 启动控制台
 
+Windows 在安装依赖后，可双击 `start-hpc-monitor.bat`，或在 PowerShell 中运行：
+
+```powershell
+& ".\start-hpc-monitor.bat"
+```
+
+脚本使用项目的 `.venv`，在后台启动服务，等页面就绪后打开浏览器；重复运行会打开已有服务。日志保存在 `console.log` 和 `console.error.log`。加上 `-NoBrowser` 可只启动服务。
+
+macOS / Linux：
+
 ```bash
 source .venv/bin/activate
 python serve.py
@@ -79,17 +89,19 @@ python serve.py
 
 ## 使用盒（SlurmBox）
 
-盒页面支持选择集群、GPU 卡数和申请时长，并根据集群配额自动计算 CPU 和内存。默认申请时长为 3 分钟，进入队列后可以尝试更新时限；也可以连续申请多条分配。
+盒页面支持选择集群、GPU 卡数和申请时长，并根据集群配额自动计算 CPU。内存可选择常规（每卡 24 GiB）或自定义总内存。自定义输入旁会显示当前所选卡数和 CPU 对应的单节点最大可用内存，扣除系统预留内存；不累加不同节点的余量，也不使用操作系统的空闲内存。自定义支持小数 GiB，按 MiB 向上取整，不要求是 24 GiB 的倍数。可用上限仅作参考，不会自动填满内存，不绑定节点，也不保证立即启动；填写超过当前可用上限的值可以提交排队。默认申请时长为 3 分钟，进入队列后可以尝试更新时限；也可以连续申请多条分配。
 
 安装 CLI 后，可以在配置的项目目录中使用：
 
 ```bash
 slurmbox doctor --dry-run
 slurmbox start
-slurmbox exec -- python train.py
+slurmbox exec --name "train model-a" -- python -u train.py
 ```
 
 保活分配只负责维持资源，不执行用户代码。用户命令通过独立的 Slurm step 运行。完整的状态协议和操作说明见 [SlurmBox skill](skills/slurmbox/SKILL.md)、[用户指南](skills/slurmbox/USER_GUIDE_ZH.md) 和 [架构说明](skills/slurmbox/ARCHITECTURE.md)。
+
+任务显示和日志输出请遵循 [日志约定](skills/slurmbox/LOGGING.md)：使用 `--name` 命名任务，stdout/stderr 自动保存到 `steps/<job>.<step>.log`；打印并刷新 `step 10/100` 或 `SCUTHPC_PROGRESS` 可显示真实进度。已结束的辅助步骤（`--kind utility`）以及没有日志的旧未命名步骤默认折叠，失败状态仍可展开查看。
 
 ## 隐私与数据范围
 

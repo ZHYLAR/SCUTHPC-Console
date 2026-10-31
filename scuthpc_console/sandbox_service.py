@@ -12,6 +12,8 @@ import threading
 from dataclasses import asdict
 from pathlib import Path
 
+from .resources import cores_per_gpu, positive_memory_mib
+
 ROOT = Path(__file__).resolve().parent.parent
 SLURMBOX_SRC = ROOT / "skills" / "slurmbox" / "src"
 if str(SLURMBOX_SRC) not in sys.path:
@@ -43,7 +45,8 @@ def _slurm_time(minutes: int) -> str:
 def request_allocation(*, project_root: Path, ssh_alias: str, remote_workdir: str,
                        cluster_id: str, partition: str, gpus: int,
                        duration_minutes: int | None = None,
-                       duration_hours: int | None = None) -> dict:
+                       duration_hours: int | None = None,
+                       memory_mib: int | None = None) -> dict:
     if gpus < 1 or gpus > 8:
         raise ValueError("卡数必须在 1 到 8 之间")
     if duration_minutes is None:
@@ -54,9 +57,8 @@ def request_allocation(*, project_root: Path, ssh_alias: str, remote_workdir: st
         raise ValueError("没有配置集群 SSH 别名")
     if not remote_workdir or any(c in remote_workdir for c in "\r\n\t\x00"):
         raise ValueError("远程工作目录无效")
-    cores_per_gpu = 9 if cluster_id.lower() == "hpckapok1" else 8
-    cpus = cores_per_gpu * gpus
-    mem = f"{24 * gpus}G"
+    cpus = cores_per_gpu(cluster_id) * gpus
+    mem = f"{positive_memory_mib(memory_mib)}M" if memory_mib is not None else f"{24 * gpus}G"
     allocation = AllocationConfig(
         job_name="SlurmBox",
         partition=partition or "gpuA800",

@@ -1,6 +1,6 @@
 ---
 name: slurmbox
-description: Develop and operate the SlurmBox persistent allocation CLI, where user commands run as independent Slurm steps inside a long-lived sandbox.
+description: Develop and operate the SlurmBox persistent allocation CLI, including named tasks, captured logs, and console progress, with independent Slurm steps inside a long-lived allocation.
 ---
 
 # SlurmBox project skill
@@ -33,6 +33,15 @@ preconfigured; never ask for or print secrets.
   explicitly requests that operation.
 - Do not add synchronization implicitly to `start`; remote workspace access
   must be explicit and documented.
+
+## Run tasks that the console can display
+
+When launching or diagnosing monitored tasks, read [LOGGING.md](LOGGING.md).
+Use `slurmbox exec --name "task/experiment" -- python -u ...` for workloads;
+use `--kind utility` only for supporting diagnostics. Keep stdout/stderr visible
+and flushed so the CLI can capture it in `steps/<job>.<step>.log`. Prefer
+newline progress such as `step 10/100` or the documented `SCUTHPC_PROGRESS`
+record. Do not promise that old steps without saved output can be recovered.
 
 ## Verification
 

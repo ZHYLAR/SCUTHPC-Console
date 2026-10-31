@@ -40,6 +40,12 @@ local shell.
 
 ## Failure boundaries
 
+Each `exec` step tees stdout/stderr to `steps/<job>.<step>.log` and atomically
+writes a `.meta.json` sidecar containing a display name and task/utility kind.
+These files live in the configured remote workspace; they do not change the
+allocation state protocol. The wrapper uses `exec` to preserve signals and
+the user's exit code. See [LOGGING.md](LOGGING.md) for the console contract.
+
 - `start` failure: no state is committed.
 - `exec` failure: return the step exit code; keep state unchanged.
 - `status` failure: report the transport/Slurm error; do not mutate state.

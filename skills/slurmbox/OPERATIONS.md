@@ -15,8 +15,8 @@ prints the exact remote command shapes without contacting Slurm.
 ```bash
 slurmbox start
 slurmbox status
-slurmbox exec -- python -m compileall src
-slurmbox exec -- bash -lc 'python train.py --epochs 1'
+slurmbox exec --name "compile check" --kind utility -- python -m compileall src
+slurmbox exec --name "train model-a" -- bash -lc 'python -u train.py --epochs 1'
 slurmbox logs
 slurmbox shell
 ```
@@ -24,6 +24,10 @@ slurmbox shell
 Use `shell` for exploratory work. Use `exec` for commands that should be
 logged by the terminal or called by another tool. A non-zero result from either
 command is a result for that step only.
+
+For task names, saved logs, and progress shown by SCUTHPC Console, follow
+[LOGGING.md](LOGGING.md). `logs` below shows the keep-alive log; task output is
+captured under `steps/` in the remote workspace.
 
 ## Inspect without changing anything
 

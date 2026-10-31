@@ -111,6 +111,22 @@ sbatch -J train --dependency=singleton train.sbatch   # 同名作业串行，天
 - 写 `run_<id>.env` 文件，作业里 `source`：多个复杂参数、要留档的配置。
 - `#SBATCH --array=0-4` + `$SLURM_ARRAY_TASK_ID`：同一脚本扫参数。
 
+### 3.5 在本项目已有 SlurmBox 盒内运行任务
+
+已有盒时，用户代码仍通过独立 step 执行，不写进保活脚本。使用有业务含义的名称，
+避免控制台只显示 `bash` / `env`：
+
+```bash
+slurmbox exec --name "eval model-a seed-0" -- python -u eval.py --seed 0
+```
+
+运行或排查控制台日志时，阅读随本项目提供的
+[SlurmBox 日志约定](../slurmbox/LOGGING.md)。stdout/stderr 会自动留存于远程工作目录的
+`steps/<job>.<step>.log`；Python 用 `-u` 或 `flush=True`，不要把全部输出只重定向到
+控制台找不到的另一个文件。打印真实的 `step 10/100` / `epoch 2/20` 或约定的
+`SCUTHPC_PROGRESS` 单行记录，控制台才能显示实验进度。辅助检查可加 `--kind utility`，
+结束后折叠显示；不要把训练或评测标成辅助检查。先用 `slurmbox exec --help` 核对安装版本。
+
 ## 四、资源与线程预算
 
 ### 4.1 分区选择与节点状态

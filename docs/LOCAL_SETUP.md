@@ -1,5 +1,25 @@
 # Local Setup
 
+## Windows
+
+After installing the dependencies into `.venv`, double-click
+`start-hpc-monitor.bat`, or run it from PowerShell:
+
+```powershell
+& ".\start-hpc-monitor.bat"
+```
+
+The launcher starts `serve.py` in the background with the project interpreter,
+waits for the local page, and opens the browser. Running it again reuses a ready
+service. Pass `-NoBrowser` to start without opening a browser. Logs are written
+to `console.log` and `console.error.log`; existing `config.json` is preserved.
+If configuration is missing, the launcher copies `config.example.json` first.
+
+The browser URL is <http://127.0.0.1:8765>. Closing the browser does not stop the
+background server. There is no automatic login startup configured on Windows.
+
+## macOS LaunchAgent
+
 - URL: http://127.0.0.1:8765
 - Python: Python 3.11 or newer (a project virtual environment is recommended)
 - Settings: `config.json` (ignored by Git; credentials stay in `~/.ssh`)

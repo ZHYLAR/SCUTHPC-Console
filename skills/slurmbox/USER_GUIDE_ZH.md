@@ -144,19 +144,23 @@ slurmbox status
 ### 6.4 执行命令
 
 ```bash
-slurmbox exec -- python -m compileall src
-slurmbox exec -- python project/train.py --epochs 1
+slurmbox exec --name "compile check" --kind utility -- python -m compileall src
+slurmbox exec --name "train model-a" -- python -u project/train.py --epochs 1
 ```
 
 命令会作为一个独立 step 执行，并把输出追加到远程工作目录下的
 `steps/<step-job-id>.<step-id>.log`。
+任务名称另存为同目录的 `.meta.json` 文件，运行结束后控制台仍能显示名称。
+`--name` 和 `--kind` 放在 `--` 之前；`--kind utility` 仅用于辅助诊断，结束后折叠显示。
+Python 输出请用 `-u` 或 `flush=True`，打印 `step 10/100` 等真实进度。
+完整格式和排障方法见 [LOGGING.md](LOGGING.md)。
 
 如果命令返回非零退出码，SlurmBox 会原样返回该退出码，但不会修改 allocation 状态。
 
 需要 shell 展开、管道或重定向时，把完整命令交给远程 `bash -lc`：
 
 ```bash
-slurmbox exec -- bash -lc 'python train.py --epochs 1 | tee train.log'
+slurmbox exec --name "train model-a" -- bash -lc 'set -o pipefail; python -u train.py --epochs 1 2>&1 | tee train.log'
 ```
 
 ### 6.5 进入交互式 shell

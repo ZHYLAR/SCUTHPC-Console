@@ -10,6 +10,8 @@ import threading
 import time
 from pathlib import Path
 
+from .resources import cores_per_gpu, recommend_memory
+
 ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_HOSTS = (
@@ -108,7 +110,8 @@ def split_job(line, n, name_index=1):
 def srun_into(jid, nodelist):
     # Slurm 20.11 只接受数字作业号。数组、异构组件用主号，并钉在该任务节点上。
     base = slurm_lookup_id(jid)
-    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe", "-N1", "-n1", "--ntasks=1"]
+    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe",
+           "-N1", "-n1", "--ntasks=1", "--exact", "--cpus-per-task=1", "--mem=128M", "--immediate=3"]
     node = (nodelist or "").split(",")[0]
     if base and jid.strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
@@ -241,11 +244,13 @@ for line in text.splitlines():
     gpu_tot = tres_gpu(cfg)
     gpu_used = min(tres_gpu(alloc), gpu_tot) if gpu_tot else tres_gpu(alloc)
     mem_alloc = tres_mem_mb(alloc)
-    sched_mem_free = max(mem - mem_alloc, 0)
+    reserved_mem = int(field(line, "MemSpecLimit") or 0)
+    sched_mem_free = max(mem - reserved_mem - mem_alloc, 0)
     bad = unavailable(state)
     nodes.append({
         "name": field(line, "NodeName"),
         "partition": part,
+        "partitions": parts.split(",") if parts and parts != "(null)" else [],
         "state": short_state(state),
         "raw_state": state,
         "offline": bad,
@@ -613,6 +618,11 @@ def _summarize(cluster: dict) -> dict:
         "offline": sum(p["offline"] for p in order),
         "sched_mem_free_mb": sum(p["sched_mem_free_mb"] for p in order),
     }
+    max_gpus = 4 if str(cluster.get("id")).lower() == "hpckapok1" else 8
+    cluster["sandbox_memory"] = {
+        str(gpus): recommend_memory(cluster, "gpuA800", gpus)
+        for gpus in range(1, max_gpus + 1)
+    }
     return cluster
 
 
@@ -749,7 +759,7 @@ _gpu_lock = threading.Lock()
 _gpu_cache: dict = {"t": 0.0, "data": None}
 
 GPU_REMOTE = r"""
-import json, os, re, subprocess
+import json, os, re, shlex, subprocess
 
 def run(args, timeout=30):
     try:
@@ -787,11 +797,41 @@ def split_job(line, n, name_index=1):
 
 def srun_into(jid, nodelist):
     base = job_anchor(jid) or (jid or "").strip()
-    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe", "-N1", "-n1", "--ntasks=1"]
+    cmd = ["srun", "--jobid=" + base, "--overlap", "--job-name=scuthpc-probe",
+           "-N1", "-n1", "--ntasks=1", "--exact", "--cpus-per-task=1", "--mem=128M", "--immediate=3"]
     node = (nodelist or "").split(",")[0]
     if base and (jid or "").strip() != base and node and node not in ("None", "(null)"):
         cmd.extend(["-w", node])
     return cmd
+
+def bound_node_gpu(jid, nodelist, gres):
+    # pam_slurm_adopt binds SSH sessions to an existing allocation on this
+    # cluster. Require that binding; never report another job's node GPUs.
+    node = (nodelist or "").split(",")[0]
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", node):
+        return ""
+    counts = re.findall(r"(?:^|,)gpu(?::[^:,()]+)?:(\d+)", gres or "")
+    wanted = sum(int(value) for value in counts)
+    if wanted < 1:
+        return ""
+    code = '''import json,os,subprocess,sys
+if os.environ.get("SLURM_JOB_ID") != sys.argv[1]:
+    print(json.dumps({"bound": False})); sys.exit(0)
+p = subprocess.run(["nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total", "--format=csv,noheader,nounits"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=8)
+print(json.dumps({"bound": True, "rc": p.returncode, "gpu": p.stdout}))
+'''
+    remote = " ".join(shlex.quote(value) for value in ["python3", "-c", code, job_anchor(jid)])
+    rc, text, err = run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", node, remote], 12)
+    if rc:
+        return ""
+    try:
+        payload = json.loads(text.strip().splitlines()[-1])
+        rows = [row for row in payload.get("gpu", "").splitlines() if re.match(r"^\s*\d+,", row)]
+        if payload.get("bound") is True and payload.get("rc") == 0 and 0 < len(rows) <= wanted:
+            return "\n".join(rows)
+    except (ValueError, IndexError, AttributeError):
+        pass
+    return ""
 
 rc, text, err = run(["squeue", "-u", user, "-h", "-o", "%i" + SEP + "%j" + SEP + "%P" + SEP + "%T" + SEP + "%b" + SEP + "%N"], 20)
 for line in text.splitlines():
@@ -809,6 +849,12 @@ for line in text.splitlines():
         "nvidia-smi", "--query-gpu=index,utilization.gpu,memory.used,memory.total",
         "--format=csv,noheader,nounits",
     ], 25)
+    source = "step"
+    if rc != 0 or not re.search(r"^\s*\d+,", gpu_txt or "", re.M):
+        fallback = bound_node_gpu(jid, nodelist, gres)
+        if fallback:
+            gpu_txt = fallback
+            source = "allocation-ssh"
     gpus = []
     for row in (gpu_txt or "").splitlines():
         cols = [c.strip() for c in row.split(",")]
@@ -823,7 +869,10 @@ for line in text.splitlines():
             })
         except ValueError:
             continue
-    jobs.append({"id": jid, "name": name, "partition": part, "gpus": gpus, "error": "" if gpus else (err or "").strip().splitlines()[-1:][:1]})
+    error = (err or "").strip().splitlines()
+    jobs.append({"id": jid, "name": name, "partition": part, "gpus": gpus,
+                 "source": source,
+                 "error": "" if gpus else (error[-1][:240] if error else "GPU query returned no data")})
 print(json.dumps({"user": user, "jobs": jobs}))
 """
 
@@ -911,7 +960,7 @@ def sandbox_options() -> dict:
             "id": cid,
             "label": label,
             "partition": "gpuA800",
-            "cores_per_gpu": 9 if cid.lower() == "hpckapok1" else 8,
+            "cores_per_gpu": cores_per_gpu(cid),
             "mem_gib_per_gpu": 24,
             "max_gpus": 4 if cid.lower() == "hpckapok1" else 8,
         })
@@ -1131,9 +1180,17 @@ def parse_sandbox_job(raw: dict | None) -> dict:
         if step_id in by_id and command:
             by_id[step_id]["command"] = command
     step_logs = raw.get("step_logs") if isinstance(raw.get("step_logs"), dict) else {}
+    step_metadata = raw.get("step_metadata") if isinstance(raw.get("step_metadata"), dict) else {}
     for step in steps:
         lines = step_logs.get(step["id"]) or []
         step["log"] = [str(line)[:240] for line in lines if str(line).strip()][-12:]
+        metadata = step_metadata.get(step["id"])
+        if isinstance(metadata, dict) and metadata.get("schema_version") == 1:
+            title = metadata.get("name")
+            if isinstance(title, str) and title.strip() and len(title) <= 80 and not any(ord(c) < 32 or ord(c) == 127 for c in title):
+                step["task_name"] = title.strip()
+            if metadata.get("kind") in ("task", "utility"):
+                step["task_kind"] = metadata["kind"]
     steps.sort(key=_step_sort_key)
     log = [str(line)[:240] for line in (raw.get("log") or []) if str(line).strip()][-20:]
     return {
@@ -1283,7 +1340,7 @@ for job in jobs:
     if not isinstance(job, dict):
         continue
     jid = str(job.get("id") or "")
-    item = {"queue": "", "sacct": "", "steps": "", "commands": [], "log": [], "step_logs": {}, "gpu": "", "gpu_error": "", "error": ""}
+    item = {"queue": "", "sacct": "", "steps": "", "commands": [], "log": [], "step_logs": {}, "step_metadata": {}, "gpu": "", "gpu_error": "", "error": ""}
     if not re.match(r"^\d+$", jid):
         item["error"] = "invalid job id"
         out["jobs"][jid or "?"] = item
@@ -1314,8 +1371,14 @@ for job in jobs:
             item["commands"].append(detail.strip().splitlines()[0][:500])
     def tail_file(path, limit):
         try:
-            if os.path.isfile(path) and os.path.getsize(path) < 30000000:
-                rc, tail, err = run(["tail", "-n", str(limit), path], 8)
+            if os.path.isfile(path):
+                with open(path, "rb") as stream:
+                    size = stream.seek(0, os.SEEK_END)
+                    offset = max(0, size - 65536)
+                    stream.seek(offset)
+                    tail = stream.read(65536).decode("utf-8", "replace")
+                if offset:
+                    tail = tail.partition("\n")[2]
                 return [ln[:240] for ln in tail.splitlines() if ln.strip()][-limit:]
         except OSError:
             return []
@@ -1344,12 +1407,25 @@ for job in jobs:
             log_dirs.append(extra)
     logs = {}
     stamps = {}
+    log_files = {}
+    metadata = {}
+    metadata_files = {}
     for step_dir in log_dirs:
         try:
             names = os.listdir(step_dir) if os.path.isdir(step_dir) else []
         except OSError:
             names = []
         for fn in names:
+            if re.match(r"^" + re.escape(jid) + r"\.\d+\.meta\.json$", fn):
+                path = os.path.join(step_dir, fn)
+                try:
+                    stamp = os.path.getmtime(path)
+                    key = fn[:-10]
+                    if key not in metadata_files or stamp > metadata_files[key][0]:
+                        metadata_files[key] = (stamp, path)
+                except OSError:
+                    pass
+                continue
             if not (fn.startswith(jid + ".") and fn.endswith(".log")):
                 continue
             path = os.path.join(step_dir, fn)
@@ -1361,11 +1437,26 @@ for job in jobs:
             if key in stamps and stamp < stamps[key]:
                 continue
             stamps[key] = stamp
-            logs[key] = tail_file(path, 12)
-    if len(logs) > 12:
-        keep = sorted(stamps, key=lambda key: stamps[key])[-12:]
-        logs = dict((key, logs[key]) for key in keep)
+            log_files[key] = path
+    active_ids = set(line.split(SEP, 1)[0].strip() for line in item["steps"].splitlines())
+    keep = sorted(stamps, key=lambda key: (key in active_ids, stamps[key]), reverse=True)[:12]
+    logs = dict((key, tail_file(log_files[key], 12)) for key in keep)
     item["step_logs"] = logs
+    # Read small sidecars separately from log tails, so names survive verbose
+    # output, completion, and the last-12-log limit. Bound work on large boxes.
+    selected = sorted(metadata_files, key=lambda key: (key in active_ids, metadata_files[key][0]), reverse=True)[:128]
+    for key in selected:
+        try:
+            path = metadata_files[key][1]
+            if os.path.getsize(path) > 16384:
+                continue
+            with open(path) as stream:
+                value = json.load(stream)
+            if isinstance(value, dict):
+                metadata[key] = dict((field, value.get(field)) for field in ("schema_version", "name", "kind"))
+        except (OSError, ValueError, UnicodeError):
+            pass
+    item["step_metadata"] = metadata
     out["jobs"][jid] = item
 print(json.dumps(out))
 """

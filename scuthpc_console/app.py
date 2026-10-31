@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import collector, sandbox_service
+from .resources import gib_to_mib
 
 app = FastAPI(title="SCUTHPC Console")
 ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +57,14 @@ async def request_sandbox(request: Request):
             duration_minutes = int(body.get("duration_hours") or 8) * 60
         if gpus > int(cluster.get("max_gpus") or 8):
             raise ValueError(f"{cluster['label']} 单节点最多申请 {cluster['max_gpus']} 张卡")
+        if gpus < 1:
+            raise ValueError("卡数必须至少为 1")
+        memory_mode = str(body.get("memory_mode") or "fixed")
+        memory_mib = None
+        if memory_mode == "custom":
+            memory_mib = gib_to_mib(body.get("memory_gib"))
+        elif memory_mode != "fixed":
+            raise ValueError("内存申请方式无效")
         defaults = sandbox_service.project_request_defaults(Path(project["root"]), cluster["ssh_alias"])
         remote_workdir = str(project.get("remote_workdir") or defaults["remote_workdir"])
         result = sandbox_service.request_allocation(
@@ -66,6 +75,7 @@ async def request_sandbox(request: Request):
             partition=cluster["partition"],
             gpus=gpus,
             duration_minutes=duration_minutes,
+            memory_mib=memory_mib,
         )
         collector.invalidate_sandbox_cache()
         return result
